@@ -359,18 +359,48 @@ test("cold move adapts to 3-arg coldSnapshot signature (issue #25)", async t => 
   assert.ok(Array.isArray(calls[0].events));
 });
 
-test("boot effect skips 3-arg coldSnapshot without errors or warnings (issue #25)", async t => {
+test("cold move preserves inheritedEventCount for seeded sessions (issue #25)", async t => {
+  const f = await fixture(t);
+  const staged = await f.stage({ header: { isSeeded: true, inheritedEventCount: 42 } });
+  f.persistence.list = async () => [{ header: staged.header, revision: "snapshot" }];
+  const calls = [];
+  f.services.sessionProjectionCache.coldSnapshot = async (meta, inheritedEventCount, events) => {
+    calls.push({ meta, inheritedEventCount, events });
+  };
+  const response = await f.mount().request("/move", { sessionId: "s1", targetWorkspaceId: "target" });
+  assert.equal(response.status, 200, response.data.error);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].meta.id, "s1");
+  assert.equal(calls[0].inheritedEventCount, 42);
+});
+
+test("boot effect refolds missing projection cache using 3-arg coldSnapshot without SessionLogOffset warnings (issue #25)", async t => {
   const f = await fixture(t); const staged = await f.stage();
   f.persistence.list = async () => [{ header: staged.header }];
-  let called = false;
+  const calls = [];
+  f.services.sessionProjectionCache.cachedSnapshot = () => undefined;
   f.services.sessionProjectionCache.coldSnapshot = async (meta, inheritedEventCount, events) => {
-    called = true;
-    if (inheritedEventCount === undefined) {
-      throw new TypeError("SessionLogOffset must be a non-negative safe integer, got undefined");
+    if (inheritedEventCount === undefined || typeof inheritedEventCount !== "number" || inheritedEventCount < 0) {
+      throw new TypeError("SessionLogOffset must be a non-negative safe integer");
     }
+    calls.push({ meta, inheritedEventCount, events });
   };
   await f.mount().boot();
-  assert.equal(called, false, "boot should skip 3-arg coldSnapshot to avoid SessionLogOffset warnings");
+  assert.equal(calls.length, 1, "missing cache should trigger coldSnapshot reconstruction");
+  assert.equal(calls[0].meta.id, "s1");
+  assert.equal(calls[0].inheritedEventCount, 0);
+  assert.ok(Array.isArray(calls[0].events));
+  assert.equal(f.warnings.filter(w => w.includes("post-boot cache refold failed")).length, 0);
+});
+
+test("boot effect skips projection cache refold when cachedSnapshot matches (issue #25)", async t => {
+  const f = await fixture(t); const staged = await f.stage();
+  f.persistence.list = async () => [{ header: staged.header }];
+  let coldCalled = false;
+  f.services.sessionProjectionCache.cachedSnapshot = (header) => ({ values: { title: "cached" } });
+  f.services.sessionProjectionCache.coldSnapshot = async () => { coldCalled = true; };
+  await f.mount().boot();
+  assert.equal(coldCalled, false, "valid cachedSnapshot must skip disk read and coldSnapshot");
   assert.equal(f.warnings.filter(w => w.includes("post-boot cache refold failed")).length, 0);
 });
 
@@ -386,4 +416,47 @@ test("archive session unpins session and triggers stopSessionActivity on fallbac
   assert.deepEqual(f.state.archivedSessionIds, ["s1"]);
   assert.deepEqual(f.state.pinnedSessionIds, ["s2"]);
   assert.deepEqual(stopped, ["s1"]);
+});
+
+test("archive session fallback aborts and does not set archived state if stopSessionActivity throws (issue #26)", async t => {
+  const f = await fixture(t);
+  f.state.archivedSessionIds = [];
+  f.state.pinnedSessionIds = ["s1"];
+  f.registry.stopSessionActivity = async () => {
+    const error = new Error("failed to stop active turn");
+    error.code = "turn-stop-failed";
+    throw error;
+  };
+  const plugin = f.mount();
+  const response = await plugin.request("/batch", { action: "archive", sessionIds: ["s1"] });
+  assert.equal(response.status, 200);
+  assert.equal(response.data.result.summary.failed, 1);
+  assert.equal(response.data.result.items[0].status, "failed");
+  assert.deepEqual(f.state.archivedSessionIds, [], "archived state must NOT be modified when stopSessionActivity fails");
+  assert.deepEqual(f.state.pinnedSessionIds, ["s1"], "pinned state must NOT be modified when stopSessionActivity fails");
+});
+
+test("archive and unarchive propagate official API rejection and never bypass via direct write (issue #26)", async t => {
+  const f = await fixture(t);
+  f.state.archivedSessionIds = [];
+  f.registry.archiveSession = async () => {
+    const error = new Error("active session cannot be archived");
+    error.code = "workspace/session-active";
+    throw error;
+  };
+  f.registry.unarchiveSession = async () => {
+    const error = new Error("unarchive rejected by official policy");
+    error.code = "workspace/rejected";
+    throw error;
+  };
+  const plugin = f.mount();
+  const archiveRes = await plugin.request("/batch", { action: "archive", sessionIds: ["s1"] });
+  assert.equal(archiveRes.status, 200);
+  assert.equal(archiveRes.data.result.summary.failed, 1);
+  assert.match(archiveRes.data.result.items[0].error, /active session cannot be archived/);
+  assert.deepEqual(f.state.archivedSessionIds, [], "must not bypass official rejection to write archive state");
+
+  const unarchiveRes = await plugin.request("/unarchive", { sessionId: "s1" });
+  assert.equal(unarchiveRes.status, 500);
+  assert.match(unarchiveRes.data.error, /unarchive rejected by official policy/);
 });

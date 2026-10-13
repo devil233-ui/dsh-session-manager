@@ -120,3 +120,8 @@ test("bulk: BatchPreviewDialog never lies about sessionIds.length (preview count
   // so the user can verify the count against the badge on the bar.
   assert.match(SRC, /t\("bulk\.dialog\.summary", \{ count: sessions\.length, action: actionLabel \}\)/);
 });
+
+test("bulk: executeBulk records remaining sessions as skipped on abort (issue #26)", () => {
+  assert.match(SRC, /items\.push\(\{ sessionId: ids\[i\], status: "skipped", reason: "aborted" \}\);/);
+  assert.match(SRC, /summary: \{ total: ids\.length, success, failed, skipped \}/);
+});

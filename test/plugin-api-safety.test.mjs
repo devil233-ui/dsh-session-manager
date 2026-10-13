@@ -506,3 +506,113 @@ test("archive and unarchive propagate official API rejection and never bypass vi
   assert.equal(unarchiveRes.status, 500);
   assert.match(unarchiveRes.data.error, /unarchive rejected by official policy/);
 });
+
+test("cold move resolves inheritedEventCount from LAST session/end-seed marker for nested fork (issue #25)", async t => {
+  const f = await fixture(t);
+  // Nested fork event stream:
+  // - First fork marker at seq 1
+  // - Intermediate turns
+  // - Second (nested) fork marker at seq 4
+  // - Normal non-inherited closer at seq 5
+  const events = [
+    { type: "user/message", seq: 0, data: { content: "original turn" } },
+    { type: "session/end-seed", seq: 1, data: { inherited: true } },
+    { type: "user/message", seq: 2, data: { content: "first fork turn" } },
+    { type: "agent/message", seq: 3, data: { content: "reply" } },
+    { type: "session/end-seed", seq: 4, data: { inherited: true } },
+    { type: "session/end-seed", seq: 5, data: {} },
+    { type: "user/message", seq: 6, data: { content: "child turn" } }
+  ];
+  const staged = await f.stage({
+    header: { isSeeded: true, parentSession: "nested-parent" },
+    events
+  });
+  f.persistence.list = async () => [{ header: staged.header, revision: "snapshot" }];
+  const calls = [];
+  f.services.sessionProjectionCache.coldSnapshot = async (meta, inheritedEventCount, events) => {
+    calls.push({ meta, inheritedEventCount, events });
+  };
+  const response = await f.mount().request("/move", { sessionId: "s1", targetWorkspaceId: "target" });
+  assert.equal(response.status, 200, response.data.error);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].inheritedEventCount, 4, "must identify the LAST inherited marker index for nested fork");
+});
+
+test("boot and move safely skip cache refold when seeded session inherited boundary cannot be resolved (issue #25)", async t => {
+  const f = await fixture(t);
+  // Seeded session where events do NOT have any inherited marker and no handle provides count
+  const staged = await f.stage({
+    header: { isSeeded: true, parentSession: "p1" },
+    events: [
+      { type: "user/message", seq: 0, data: { content: "missing marker" } }
+    ]
+  });
+  f.persistence.list = async () => [{ header: staged.header, revision: "snapshot" }];
+  const coldCalls = [];
+  f.services.sessionProjectionCache.cachedSnapshot = () => undefined;
+  f.services.sessionProjectionCache.coldSnapshot = async (meta, count, events) => {
+    coldCalls.push({ meta, count, events });
+  };
+
+  // Boot should skip refold rather than incorrectly passing 0 or undefined
+  await f.mount().boot();
+  assert.equal(coldCalls.length, 0, "boot must not call coldSnapshot with invalid cut for unresolvable seeded session");
+  assert.ok(f.warnings.some(w => w.includes("cannot determine inheritedEventCount")), "must warn about unresolvable seeded session during boot");
+
+  // Move should move session cleanly but skip cache refold rather than passing 0
+  const moveRes = await f.mount().request("/move", { sessionId: "s1", targetWorkspaceId: "target" });
+  assert.equal(moveRes.status, 200);
+  assert.equal(coldCalls.length, 0, "move must skip coldSnapshot when inheritedEventCount cannot be determined");
+  assert.ok(f.warnings.some(w => w.includes("skipping post-move cache refresh")), "must warn about skipping post-move cache refresh");
+});
+
+test("archive session fails when ctx.waterfall reports ongoing activity (job/subagent/schedule) (issue #26)", async t => {
+  const f = await fixture(t);
+  f.state.archivedSessionIds = [];
+  f.ctx.waterfall = async (name, payload) => {
+    if (name === "workspace/session-activity" && payload.sessionId === "s1") {
+      return [{ kind: "subagent" }, { kind: "job" }];
+    }
+    return [];
+  };
+  const plugin = f.mount();
+  const res = await plugin.request("/batch", { action: "archive", sessionIds: ["s1"] });
+  assert.equal(res.status, 200);
+  assert.equal(res.data.result.summary.failed, 1);
+  assert.equal(res.data.result.items[0].status, "failed");
+  assert.equal(res.data.result.items[0].code, "workspace/session-active");
+  assert.match(res.data.result.items[0].error, /subagent, job/);
+  assert.deepEqual(f.state.archivedSessionIds, [], "must not archive when waterfall reports active tasks");
+});
+
+test("archive session with stopActivity: true rejects when no valid stop interface is available (issue #26)", async t => {
+  const f = await fixture(t);
+  f.state.archivedSessionIds = [];
+  f.live.set("s1", { activeTurn: "turn-1" });
+  // Neither registry.stopSessionActivity nor ctx.parallel available
+  f.registry.stopSessionActivity = undefined;
+  f.ctx.parallel = undefined;
+  const plugin = f.mount();
+  const res = await plugin.request("/batch", { action: "archive", sessionIds: ["s1"], payload: { stopActivity: true } });
+  assert.equal(res.status, 200);
+  assert.equal(res.data.result.summary.failed, 1);
+  assert.equal(res.data.result.items[0].code, "stop-activity-unavailable");
+  assert.deepEqual(f.state.archivedSessionIds, [], "must safely reject and not write archived state when no stop interface exists");
+});
+
+test("archive session with stopActivity: true stops activity via ctx.parallel when stopSessionActivity is absent (issue #26)", async t => {
+  const f = await fixture(t);
+  f.state.archivedSessionIds = [];
+  f.live.set("s1", { activeTurn: "turn-1" });
+  f.registry.stopSessionActivity = undefined;
+  const parallelCalls = [];
+  f.ctx.parallel = async (name, payload) => {
+    parallelCalls.push({ name, payload });
+  };
+  const plugin = f.mount();
+  const res = await plugin.request("/batch", { action: "archive", sessionIds: ["s1"], payload: { stopActivity: true } });
+  assert.equal(res.status, 200);
+  assert.equal(res.data.result.summary.success, 1);
+  assert.deepEqual(f.state.archivedSessionIds, ["s1"]);
+  assert.deepEqual(parallelCalls, [{ name: "workspace/session-stop", payload: { sessionId: "s1" } }], "must dispatch workspace/session-stop via ctx.parallel");
+});

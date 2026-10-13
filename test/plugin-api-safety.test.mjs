@@ -359,10 +359,13 @@ test("cold move adapts to 3-arg coldSnapshot signature (issue #25)", async t => 
   assert.ok(Array.isArray(calls[0].events));
 });
 
-test("cold move preserves inheritedEventCount for seeded sessions (issue #25)", async t => {
+test("cold move resolves inheritedEventCount from SessionHandle when session is seeded (issue #25)", async t => {
   const f = await fixture(t);
-  const staged = await f.stage({ header: { isSeeded: true, inheritedEventCount: 42 } });
+  // Realistic DSH SessionHeader does NOT contain inheritedEventCount:
+  const staged = await f.stage({ header: { isSeeded: true, parentSession: "p1" } });
   f.persistence.list = async () => [{ header: staged.header, revision: "snapshot" }];
+  // SessionHandle exposes inheritedEventCount via persistence.open:
+  f.persistence.open = async (sessionId) => ({ inheritedEventCount: 12, close: async () => {} });
   const calls = [];
   f.services.sessionProjectionCache.coldSnapshot = async (meta, inheritedEventCount, events) => {
     calls.push({ meta, inheritedEventCount, events });
@@ -371,11 +374,46 @@ test("cold move preserves inheritedEventCount for seeded sessions (issue #25)", 
   assert.equal(response.status, 200, response.data.error);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].meta.id, "s1");
-  assert.equal(calls[0].inheritedEventCount, 42);
+  assert.equal(calls[0].meta.cwd, f.target);
+  assert.equal(calls[0].inheritedEventCount, 12, "must resolve inheritedEventCount from SessionHandle");
+  assert.ok(Array.isArray(calls[0].events));
 });
 
-test("boot effect refolds missing projection cache using 3-arg coldSnapshot without SessionLogOffset warnings (issue #25)", async t => {
-  const f = await fixture(t); const staged = await f.stage();
+test("cold move resolves inheritedEventCount from event log session/end-seed marker (issue #25)", async t => {
+  const f = await fixture(t);
+  // Realistic DSH fork events: prefix followed by session/end-seed marker event
+  const events = [
+    { type: "user/message", seq: 0, data: { content: "hello" } },
+    { type: "agent/message", seq: 1, data: { content: "world" } },
+    { type: "session/end-seed", seq: 2, data: { inherited: true } },
+    { type: "user/message", seq: 3, data: { content: "new question" } }
+  ];
+  const staged = await f.stage({
+    header: { isSeeded: true, parentSession: "p1" },
+    events
+  });
+  f.persistence.list = async () => [{ header: staged.header, revision: "snapshot" }];
+  const calls = [];
+  f.services.sessionProjectionCache.coldSnapshot = async (meta, inheritedEventCount, events) => {
+    calls.push({ meta, inheritedEventCount, events });
+  };
+  const response = await f.mount().request("/move", { sessionId: "s1", targetWorkspaceId: "target" });
+  assert.equal(response.status, 200, response.data.error);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].inheritedEventCount, 2, "must resolve inheritedEventCount from session/end-seed marker index");
+});
+
+test("boot effect refolds missing projection cache using inheritedEventCount from session/end-seed marker (issue #25)", async t => {
+  const f = await fixture(t);
+  const events = [
+    { type: "user/message", seq: 0, data: { content: "q" } },
+    { type: "session/end-seed", seq: 1, data: { inherited: true } },
+    { type: "agent/message", seq: 2, data: { content: "a" } }
+  ];
+  const staged = await f.stage({
+    header: { isSeeded: true, parentSession: "p1" },
+    events
+  });
   f.persistence.list = async () => [{ header: staged.header }];
   const calls = [];
   f.services.sessionProjectionCache.cachedSnapshot = () => undefined;
@@ -388,8 +426,7 @@ test("boot effect refolds missing projection cache using 3-arg coldSnapshot with
   await f.mount().boot();
   assert.equal(calls.length, 1, "missing cache should trigger coldSnapshot reconstruction");
   assert.equal(calls[0].meta.id, "s1");
-  assert.equal(calls[0].inheritedEventCount, 0);
-  assert.ok(Array.isArray(calls[0].events));
+  assert.equal(calls[0].inheritedEventCount, 1, "must resolve inheritedEventCount for seeded session on boot");
   assert.equal(f.warnings.filter(w => w.includes("post-boot cache refold failed")).length, 0);
 });
 
@@ -404,36 +441,45 @@ test("boot effect skips projection cache refold when cachedSnapshot matches (iss
   assert.equal(f.warnings.filter(w => w.includes("post-boot cache refold failed")).length, 0);
 });
 
-test("archive session unpins session and triggers stopSessionActivity on fallback (issue #26)", async t => {
-  const f = await fixture(t);
-  f.state.archivedSessionIds = [];
-  f.state.pinnedSessionIds = ["s1", "s2"];
-  const stopped = [];
-  f.registry.stopSessionActivity = async (id) => { stopped.push(id); };
-  const plugin = f.mount();
-  const response = await plugin.request("/batch", { action: "archive", sessionIds: ["s1"] });
-  assert.equal(response.status, 200);
-  assert.deepEqual(f.state.archivedSessionIds, ["s1"]);
-  assert.deepEqual(f.state.pinnedSessionIds, ["s2"]);
-  assert.deepEqual(stopped, ["s1"]);
-});
-
-test("archive session fallback aborts and does not set archived state if stopSessionActivity throws (issue #26)", async t => {
+test("archive session defaults to stopActivity: false and fails if session is active (issue #26)", async t => {
   const f = await fixture(t);
   f.state.archivedSessionIds = [];
   f.state.pinnedSessionIds = ["s1"];
-  f.registry.stopSessionActivity = async () => {
-    const error = new Error("failed to stop active turn");
-    error.code = "turn-stop-failed";
-    throw error;
-  };
+  // Set session as active
+  f.live.set("s1", { activeTurn: "turn-1" });
+  const stopped = [];
+  f.registry.stopSessionActivity = async (id) => { stopped.push(id); };
   const plugin = f.mount();
+  // Attempt archiving without stopActivity: true
   const response = await plugin.request("/batch", { action: "archive", sessionIds: ["s1"] });
   assert.equal(response.status, 200);
   assert.equal(response.data.result.summary.failed, 1);
   assert.equal(response.data.result.items[0].status, "failed");
-  assert.deepEqual(f.state.archivedSessionIds, [], "archived state must NOT be modified when stopSessionActivity fails");
-  assert.deepEqual(f.state.pinnedSessionIds, ["s1"], "pinned state must NOT be modified when stopSessionActivity fails");
+  assert.equal(response.data.result.items[0].code, "workspace/session-active");
+  assert.deepEqual(f.state.archivedSessionIds, [], "active session must not be archived when stopActivity is false");
+  assert.deepEqual(stopped, [], "agent must NOT be stopped when stopActivity is false");
+});
+
+test("archive session with explicit stopActivity: true stops active session after archiving in fallback (issue #26)", async t => {
+  const f = await fixture(t);
+  f.state.archivedSessionIds = [];
+  f.state.pinnedSessionIds = ["s1"];
+  f.live.set("s1", { activeTurn: "turn-1" });
+  const events = [];
+  f.registry.setState = async (next) => {
+    events.push("setState");
+    f.state.archivedSessionIds = next.archivedSessionIds;
+    f.state.pinnedSessionIds = next.pinnedSessionIds;
+  };
+  f.registry.stopSessionActivity = async (id) => {
+    events.push("stopSessionActivity:" + id);
+  };
+  const plugin = f.mount();
+  const response = await plugin.request("/batch", { action: "archive", sessionIds: ["s1"], payload: { stopActivity: true } });
+  assert.equal(response.status, 200);
+  assert.equal(response.data.result.summary.success, 1);
+  assert.deepEqual(f.state.archivedSessionIds, ["s1"]);
+  assert.deepEqual(events, ["setState", "stopSessionActivity:s1"], "must update state before stopping activity (matching DSH official order)");
 });
 
 test("archive and unarchive propagate official API rejection and never bypass via direct write (issue #26)", async t => {

@@ -55,6 +55,7 @@ async function fixture(t) {
     workspaceRegistry: registry,
     sessions: { get: id => live.get(id), flush: async () => {} },
     agents: { get: () => undefined },
+    waterfall: async (name, payload, fallback) => typeof fallback === "function" ? fallback() : [],
     workspaces: { archiveSession: async (sessionId) => { state = { ...state, archivedSessionIds: Array.from(new Set([...state.archivedSessionIds, sessionId])) }; } },
     get: name => services[name], emit: (...args) => emitted.push(args),
     logger: { info() {}, warn: message => warnings.push(message) },

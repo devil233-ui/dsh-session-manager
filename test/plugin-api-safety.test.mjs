@@ -47,6 +47,7 @@ async function fixture(t) {
     workspaceRegistry: registry,
     sessions: { get: id => live.get(id), flush: async () => {} },
     agents: { get: () => undefined },
+    waterfall: async (name, payload, fallback) => typeof fallback === "function" ? fallback() : [],
     get: name => services[name], emit: (...args) => emitted.push(args),
     logger: { info() {}, warn: message => warnings.push(message) },
   };
@@ -615,4 +616,33 @@ test("archive session with stopActivity: true stops activity via ctx.parallel wh
   assert.equal(res.data.result.summary.success, 1);
   assert.deepEqual(f.state.archivedSessionIds, ["s1"]);
   assert.deepEqual(parallelCalls, [{ name: "workspace/session-stop", payload: { sessionId: "s1" } }], "must dispatch workspace/session-stop via ctx.parallel");
+});
+
+test("archive session fallback rejects when ctx.waterfall is unavailable (issue #26)", async t => {
+  const f = await fixture(t);
+  f.state.archivedSessionIds = [];
+  // ctx.waterfall missing (unable to verify job/subagent/schedule activity)
+  f.ctx.waterfall = undefined;
+  const plugin = f.mount();
+  const res = await plugin.request("/batch", { action: "archive", sessionIds: ["s1"] });
+  assert.equal(res.status, 200);
+  assert.equal(res.data.result.summary.failed, 1);
+  assert.equal(res.data.result.items[0].code, "activity-inspection-unavailable");
+  assert.deepEqual(f.state.archivedSessionIds, [], "must safely reject archive when ctx.waterfall is missing");
+});
+
+test("archive session fallback rejects when ctx.waterfall query throws an error (issue #26)", async t => {
+  const f = await fixture(t);
+  f.state.archivedSessionIds = [];
+  // ctx.waterfall query throws unexpected exception
+  f.ctx.waterfall = async () => {
+    throw new Error("provider inspection timed out");
+  };
+  const plugin = f.mount();
+  const res = await plugin.request("/batch", { action: "archive", sessionIds: ["s1"] });
+  assert.equal(res.status, 200);
+  assert.equal(res.data.result.summary.failed, 1);
+  assert.equal(res.data.result.items[0].code, "activity-check-failed");
+  assert.match(res.data.result.items[0].error, /provider inspection timed out/);
+  assert.deepEqual(f.state.archivedSessionIds, [], "must never swallow query exception and must not archive session");
 });

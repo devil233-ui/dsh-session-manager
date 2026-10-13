@@ -1,3 +1,16 @@
+## 0.6.4 — 2026-10-13
+
+- **fix(ui)**: 修复会话管理面板被 DSH 侧边栏及主视图遮挡、无法交互的问题（Issue #28）：
+  - 会话管理主面板（`SessionManagerPanel`）使用 `renderInOverlay` 通过 `React.createPortal` 挂载到顶层 `#dsh-session-manager-overlay-root`，脱离主视窗/侧边栏容器的 DOM 结构与层叠上下文限制。
+  - 外层包裹带有 `pointer-events: auto` 的 `sm-overlayLayer` 容器，确保弹窗内部点击、滚动及输入事件正常响应，且不阻止未遮挡区域的交互。
+- **fix(compat)**: 适配 DSH 0.2.0-rc.2+ 的 `coldSnapshot` 3 参数签名，消除启动警告刷屏与搬移后投影不刷新（Issue #25）：
+  - 跨工作区搬移会话后动态探测缓存方法签名，向 DSH 0.2.0-rc.2+ 传入 `(newHeader, 0, events)`，旧版本回退为 `sessionId`，并具备自动捕获与重试机制。
+  - 启动阶段扫描识别 3 参数签名并跳过盲调，避免因缺失 events 导致抛出 `SessionLogOffset must be a non-negative safe integer` 警告。
+- **fix(workspace)**: 修复归档/取消归档会话后主侧边栏状态不一致的问题（Issue #26）：
+  - 客户端优先调用官方 `uiWorkspace` / `workspaces` 命令更新工作区状态，确保主界面会话列表与本地状态即时同步。
+  - Host 端直接写入回退路径补齐官方语义：归档时自动从 `pinnedSessionIds` 中解绑置顶会话，并以 best-effort 方式调用 `stopSessionActivity` 停止活动轮次。
+- **test**: 新增针对 Issue #28（面板遮罩与浮层测试）、Issue #25（冷搬移 3 参适配与开机跳过盲调测试）、Issue #26（回退解绑置顶与停止会话活动测试）的自动化测试，测试套件全部通过（375 项）。
+- **docs**: 精简中英文 README 中「弹窗透明度」与「主题」章节，去除冗余实现细节，仅保留核心功能介绍。
 
 ## 0.6.3 — 2026-10-03
 

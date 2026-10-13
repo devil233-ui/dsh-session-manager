@@ -342,3 +342,48 @@ test("moving and migrating preserve annotations by ID; successful deletion remov
   response = await plugin.request("/annotations", undefined, "GET");
   assert.ok(!Object.hasOwn(response.data.result.annotations, "s1"));
 });
+
+test("cold move adapts to 3-arg coldSnapshot signature (issue #25)", async t => {
+  const f = await fixture(t); const staged = await f.stage();
+  f.persistence.list = async () => [{ header: staged.header, revision: "snapshot" }];
+  const calls = [];
+  f.services.sessionProjectionCache.coldSnapshot = async (meta, inheritedEventCount, events) => {
+    calls.push({ meta, inheritedEventCount, events });
+  };
+  const response = await f.mount().request("/move", { sessionId: "s1", targetWorkspaceId: "target" });
+  assert.equal(response.status, 200, response.data.error);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].meta.id, "s1");
+  assert.equal(calls[0].meta.cwd, f.target);
+  assert.equal(calls[0].inheritedEventCount, 0);
+  assert.ok(Array.isArray(calls[0].events));
+});
+
+test("boot effect skips 3-arg coldSnapshot without errors or warnings (issue #25)", async t => {
+  const f = await fixture(t); const staged = await f.stage();
+  f.persistence.list = async () => [{ header: staged.header }];
+  let called = false;
+  f.services.sessionProjectionCache.coldSnapshot = async (meta, inheritedEventCount, events) => {
+    called = true;
+    if (inheritedEventCount === undefined) {
+      throw new TypeError("SessionLogOffset must be a non-negative safe integer, got undefined");
+    }
+  };
+  await f.mount().boot();
+  assert.equal(called, false, "boot should skip 3-arg coldSnapshot to avoid SessionLogOffset warnings");
+  assert.equal(f.warnings.filter(w => w.includes("post-boot cache refold failed")).length, 0);
+});
+
+test("archive session unpins session and triggers stopSessionActivity on fallback (issue #26)", async t => {
+  const f = await fixture(t);
+  f.state.archivedSessionIds = [];
+  f.state.pinnedSessionIds = ["s1", "s2"];
+  const stopped = [];
+  f.registry.stopSessionActivity = async (id) => { stopped.push(id); };
+  const plugin = f.mount();
+  const response = await plugin.request("/batch", { action: "archive", sessionIds: ["s1"] });
+  assert.equal(response.status, 200);
+  assert.deepEqual(f.state.archivedSessionIds, ["s1"]);
+  assert.deepEqual(f.state.pinnedSessionIds, ["s2"]);
+  assert.deepEqual(stopped, ["s1"]);
+});

@@ -68,9 +68,13 @@ test("bulk: SessionManagerPanel renders every bulk dialog as a sibling (z-index 
   // None of the new dialogs may be children of the existing confirm /
   // move / migrate dialogs, otherwise Esc on the inner modal would
   // bubble through the outer modal's listener and double-fire.
-  const panelModalRender = SRC.indexOf("const panelModal = h(\"div\"");
+  // Issue #28 moved the panel modal behind renderInOverlay() so it escapes the
+  // sidebar subtree (see client-panel-overlay.test.mjs). The invariant this
+  // guard owns is unchanged: panelModal is declared here and stays a sibling of
+  // every dialog in the single Fragment return below.
+  const panelModalRender = SRC.indexOf("const panelModal = renderInOverlay(h(\"div\"");
   const allBulkDialogsRender = SRC.indexOf("const bulkPreviewDialog = bulkPreview");
-  assert.ok(panelModalRender > 0, "panelModal must be defined");
+  assert.ok(panelModalRender > 0, "panelModal must be defined and portaled through renderInOverlay");
   assert.ok(allBulkDialogsRender > 0, "all bulk dialogs are declared next to the existing single-session dialogs");
   // Same Fragment return — the dialogs live alongside panelModal,
   // deleteDialog, moveDialog, migrateDialog, annotationDialog.

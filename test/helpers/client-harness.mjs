@@ -36,6 +36,12 @@ export function mountClient({ sessions = [], current = "", archivedIds = [], wor
   let workspaceData = workspaces, response = fetchWorkspaces, annotationFetch = fetchAnnotations, annotationSave = saveAnnotations;
   let annotationData = Object.fromEntries(Object.entries(sessionAnnotations).map(([id, value]) => [id, { ...DEFAULT_ANNOTATION, revision: 1, ...value }]));
   const requests = [], alerts = [], pluginCleanup = [];
+  // Portal calls made through React.createPortal. The stub returns the node
+  // unchanged (so the rendered tree stays walkable) while recording the target
+  // container, which is how tests assert that a document-level surface -- the
+  // session manager panel, every dialog -- really leaves its slot subtree and
+  // is portaled into the plugin's overlay root instead of rendering in place.
+  const portals = [];
   const listeners = new Map();
   let activeHost;
   const sessionOpenCalls = [];
@@ -50,6 +56,7 @@ export function mountClient({ sessions = [], current = "", archivedIds = [], wor
   const React = {
     Component: class { constructor(props) { this.props = props; } }, Fragment: Symbol("Fragment"),
     createElement: (type, props, ...children) => ({ type, props: { ...props, children } }),
+    createPortal(node, container) { portals.push({ node, container }); return node; },
     useState(initial) {
       const [host, slot] = hook();
       if (!("value" in slot)) slot.value = typeof initial === "function" ? initial() : initial;
@@ -217,6 +224,8 @@ export function mountClient({ sessions = [], current = "", archivedIds = [], wor
     get rootStyleValues() { return rootStyleValues; },
     /** <style> tags the bundle appended to <head>. */
     get styleTags() { return styleTags; },
+    /** Every React.createPortal(node, container) call, in order. */
+    get portals() { return portals; },
     mountComponent(component, props) { return host(component, props); },
     get requests() { return requests; }, get workspaceRequests() { return requests.filter(r => r.url.endsWith("/workspaces")); },
     get sourceIds() { return list.ids; }, get annotations() { return annotationData; }, get alerts() { return alerts; },

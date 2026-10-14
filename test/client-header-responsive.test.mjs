@@ -15,7 +15,7 @@ const SRC = readFileSync(new URL("../lib/client.js", import.meta.url), "utf8");
 // 1. Static CSS and Architecture Guards (§5, §6)
 // =========================================================================
 
-test("header-responsive: DSH container query rules defined for 1000px and 520px", () => {
+test("header-responsive: DSH container query rules defined for 1000px, 520px, and 420px", () => {
   // Container query for medium width: 32x32 square icon-only, hide labels/badge
   assert.match(SRC, /@container\s*\(max-width:1000px\)\s*\{[\s\S]*?\.sm-headerBtn\s*\{[^}]*width:32px[^}]*height:32px/);
   assert.match(SRC, /@container\s*\(max-width:1000px\)\s*\{[\s\S]*?\.sm-headerBtnLabel[^}]*display:none/);
@@ -24,6 +24,12 @@ test("header-responsive: DSH container query rules defined for 1000px and 520px"
   // Container query for narrow width: fold secondary actions into compact menu
   assert.match(SRC, /@container\s*\(max-width:520px\)\s*\{[\s\S]*?\.sm-headerSecondaryActions[^}]*display:none!important/);
   assert.match(SRC, /@container\s*\(max-width:520px\)\s*\{[\s\S]*?\.sm-headerCompactMenu\s*\{[^}]*display:inline-flex/);
+
+  // Container query for ultra-narrow width: fold all actions into compact menu
+  assert.match(SRC, /@container\s*\(max-width:420px\)\s*\{[\s\S]*?\.sm-header>:not\(\.sm-headerCompactMenu\)\{display:none!important\}/);
+  assert.match(SRC, /@container\s*\(max-width:420px\)\s*\{[\s\S]*?\.sm-headerCompactMenu\{display:inline-flex!important\}/);
+  assert.match(SRC, /@container\s*\(max-width:420px\)\s*\{[\s\S]*?\.sm-headerMenu\{right:auto!important;left:0!important\}/);
+  assert.match(SRC, /@container\s*\(max-width:420px\)\s*\{[\s\S]*?\.sm-headerMenuUltraOnly\{display:flex!important\}/);
 });
 
 test("header-responsive: .sm-header uses flex-wrap: nowrap and does not wrap", () => {
@@ -65,6 +71,7 @@ test("header-responsive: .sm-headerBtnDanger uses solid red on hover", () => {
 test("header-responsive: compact dropdown menu classes follow DSH tokens", () => {
   assert.match(SRC, /\.sm-headerMenu\{[^}]*position:absolute/);
   assert.match(SRC, /\.sm-headerMenuItem\{[^}]*display:flex/);
+  assert.match(SRC, /\.sm-headerMenuUltraOnly\{display:none!important\}/);
   assert.match(SRC, /\.sm-headerMenuItemDanger\{[^}]*color:var\(--dsw-alias-state-error-primary/);
   // The danger menu item keeps its red tint from a real DSH token instead of a
   // private light/dark palette, so it follows the active theme.
@@ -151,12 +158,10 @@ test("header-responsive: compact menu opens and displays secondary action items"
   assert.ok(menu, "dropdown menu must be open");
 
   const menuItems = nodes(menu, n => n.props?.className?.includes("sm-headerMenuItem"));
-  assert.ok(menuItems.length >= 3, "must have at least edit, move, delete in menu");
+  assert.equal(menuItems.length, 6, "must have archive, favorite, review, edit, move, delete in menu");
 
   const menuTexts = menuItems.map(item => text(item));
-  assert.ok(menuTexts.some(t => t.includes("标签/备注")), "must contain 标签/备注");
-  assert.ok(menuTexts.some(t => t.includes("移动至工作区")), "must contain 移动至工作区");
-  assert.ok(menuTexts.some(t => t.includes("删除会话")), "must contain 删除会话");
+  assert.deepEqual(menuTexts, ["📥归档", "☆收藏会话", "◷标记待回看", "🏷标签/备注", "↔移动至工作区", "🗑删除会话"]);
 
   // Clicking ⋯ button again toggles it closed
   const updatedMoreBtn = nodes(app.headerTree, n => n.props?.className?.includes("sm-headerCompactMenuBtn"))[0];
@@ -209,4 +214,84 @@ test("header-responsive: clicking dropdown items triggers their respective dialo
   // Delete confirm dialog is opened
   const confirmDialog = nodes(app.headerTree, n => n.props?.title === "删除会话")[0];
   assert.ok(confirmDialog, "ConfirmDialog must be opened from menu");
+});
+
+test("header-responsive: clicking favorite and review in compact menu toggles annotations", async (t) => {
+  const app = await setupHeader(t);
+
+  // Open ⋯ menu
+  const moreBtn = nodes(app.headerTree, n => n.props?.className?.includes("sm-headerCompactMenuBtn"))[0];
+  moreBtn.props.onClick({ stopPropagation() {} });
+  await app.flush();
+
+  const menu = nodes(app.headerTree, n => n.props?.className === "sm-headerMenu")[0];
+  const favItem = nodes(menu, n => n.props?.className?.includes("sm-headerMenuItem") && text(n).includes("收藏会话"))[0];
+  assert.ok(favItem, "favorite item must exist in menu");
+
+  // Click favorite
+  favItem.props.onClick();
+  await app.flush();
+
+  // Menu is closed after clicking
+  assert.equal(nodes(app.headerTree, n => n.props?.className === "sm-headerMenu").length, 0);
+
+  // Re-open menu to verify favorite state updated
+  const moreBtn2 = nodes(app.headerTree, n => n.props?.className?.includes("sm-headerCompactMenuBtn"))[0];
+  moreBtn2.props.onClick({ stopPropagation() {} });
+  await app.flush();
+
+  const menu2 = nodes(app.headerTree, n => n.props?.className === "sm-headerMenu")[0];
+  const unfavItem = nodes(menu2, n => n.props?.className?.includes("sm-headerMenuItem") && text(n).includes("取消收藏"))[0];
+  assert.ok(unfavItem, "menu item should now reflect favorite active (取消收藏)");
+
+  // Click review later
+  const reviewItem = nodes(menu2, n => n.props?.className?.includes("sm-headerMenuItem") && text(n).includes("标记待回看"))[0];
+  assert.ok(reviewItem, "review item must exist in menu");
+  reviewItem.props.onClick();
+  await app.flush();
+
+  assert.equal(nodes(app.headerTree, n => n.props?.className === "sm-headerMenu").length, 0);
+
+  // Re-open menu to verify review later state updated
+  const moreBtn3 = nodes(app.headerTree, n => n.props?.className?.includes("sm-headerCompactMenuBtn"))[0];
+  moreBtn3.props.onClick({ stopPropagation() {} });
+  await app.flush();
+
+  const menu3 = nodes(app.headerTree, n => n.props?.className === "sm-headerMenu")[0];
+  const unreviewItem = nodes(menu3, n => n.props?.className?.includes("sm-headerMenuItem") && text(n).includes("取消待回看"))[0];
+  assert.ok(unreviewItem, "menu item should now reflect review later active (取消待回看)");
+});
+
+test("header-responsive: secondary dialogs respect sidebar boundary and do not overlap sidebar", async (t) => {
+  const customQuerySelector = (sel) => {
+    if (sel === "[data-dsh-sidebar]" || sel === "aside" || sel === ".dsw-sidebar") {
+      return {
+        getBoundingClientRect: () => ({ right: 280, left: 0, width: 280, top: 0, bottom: 900 })
+      };
+    }
+    return null;
+  };
+
+  const app = await setupHeader(t, { querySelector: customQuerySelector, innerWidth: 400 });
+
+  // Open ⋯ menu
+  const moreBtn = nodes(app.headerTree, n => n.props?.className?.includes("sm-headerCompactMenuBtn"))[0];
+  moreBtn.props.onClick({ stopPropagation() {} });
+  await app.flush();
+
+  // Click "删除会话"
+  const menu = nodes(app.headerTree, n => n.props?.className === "sm-headerMenu")[0];
+  const deleteItem = nodes(menu, n => n.props?.className?.includes("sm-headerMenuItem") && text(n).includes("删除会话"))[0];
+  deleteItem.props.onClick({ currentTarget: { nodeType: 1, getBoundingClientRect: () => ({ top: 40, bottom: 72, left: 290, right: 322, width: 32, height: 32 }) } });
+  await app.flush();
+
+  const confirmDialog = nodes(app.headerTree, n => n.props?.title === "删除会话")[0];
+  assert.ok(confirmDialog, "ConfirmDialog must be opened");
+
+  // Mount dialog layer
+  const host = app.mountComponent(confirmDialog.type, confirmDialog.props);
+  assert.ok(host.tree, "dialog layer rendered");
+  const leftPx = parseInt(host.tree.props.style.left, 10);
+  assert.ok(leftPx >= 288, `dialog left (${leftPx}px) must be >= sidebarRight + 8 (288px) to prevent overlap`);
+  host.dispose();
 });

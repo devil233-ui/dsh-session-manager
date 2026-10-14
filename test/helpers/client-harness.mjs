@@ -28,7 +28,7 @@ const clipboardStub = { writes: [], writeText(text) { this.writes.push(text); re
 /** Real, unmodified client bundle and registered slots, with a small hook host
  * to keep CI dependency-free. Tests exercise rendered controls, shared-store
  * subscriptions, async responses and the actual annotation editor. */
-export function mountClient({ sessions = [], current = "", archivedIds = [], workspaces = [], language = "zh", sessionCreatedAt = {}, fetchWorkspaces, sessionAnnotations = {}, fetchAnnotations, saveAnnotations, fetchUpdateCheck, fetchUpdateInstall, fetchNpmLatest, confirm = () => true, wide = true, initialStorage = {} } = {}) {
+export function mountClient({ sessions = [], current = "", archivedIds = [], workspaces = [], language = "zh", sessionCreatedAt = {}, fetchWorkspaces, sessionAnnotations = {}, fetchAnnotations, saveAnnotations, fetchUpdateCheck, fetchUpdateInstall, fetchNpmLatest, fetchPresetScan, confirm = () => true, wide = true, initialStorage = {}, innerWidth = 1200, innerHeight = 768, querySelector: customQuerySelector } = {}) {
   // Fresh clipboard stub per mount so each test sees only its own writes.
   clipboardStub.writes.length = 0;
   let list = { ids: sessions.map(s => s.id), byId: Object.fromEntries(sessions.map(s => [s.id, s])), current };
@@ -115,16 +115,27 @@ export function mountClient({ sessions = [], current = "", archivedIds = [], wor
     if (!match) return null;
     return styleTags.find(tag => tag.dataset.pluginCss === match[1]) ?? null;
   };
+  const matchSelector = (selector) => {
+    if (customQuerySelector) {
+      const custom = customQuerySelector(selector);
+      if (custom !== undefined) return custom;
+    }
+    return matchPluginCss(selector);
+  };
   const head = { appendChild(node) { if (node && node.dataset) styleTags.push(node); } };
-  const document = { documentElement, body: element(), head, querySelector: matchPluginCss, querySelectorAll: () => [], createElement: element };
+  const document = { documentElement, body: element(), head, querySelector: matchSelector, querySelectorAll: () => [], createElement: element };
   let exports;
   const window = {
-    innerWidth: 1200, confirm, alert: message => alerts.push(message),
+    innerWidth, innerHeight, confirm, alert: message => alerts.push(message),
     localStorage: localStorageStub,
     get __DSH_SM_TEST_UPDATE__() { return globalThis.__DSH_SM_TEST_UPDATE__; },
     set __DSH_SM_TEST_UPDATE__(v) { globalThis.__DSH_SM_TEST_UPDATE__ = v; },
     addEventListener(type, handler) { if (!listeners.has(type)) listeners.set(type, new Set()); listeners.get(type).add(handler); },
     removeEventListener(type, handler) { listeners.get(type)?.delete(handler); },
+    dispatchEvent(event) {
+      const type = event?.type || event;
+      for (const handler of listeners.get(type) ?? []) handler(event);
+    },
     __ModuleLoader__: { load(bundle) { exports = bundle.factory(name => name === "react" ? React : name === "@deepseek-ai/dsh-client-ui-primitives" ? { IconArchiveOutline20: () => null } : {}); } },
   };
   const navigator = { clipboard: clipboardStub };
@@ -162,6 +173,14 @@ export function mountClient({ sessions = [], current = "", archivedIds = [], wor
       } else if (url === "/session-manager/api/delete") {
         const body = options?.body ? JSON.parse(options.body) : {};
         data = { ok: true, result: { sessionId: body.sessionId, deleted: true } };
+      } else if (typeof url === "string" && url.startsWith("/session-manager/api/preset-scan")) {
+        data = fetchPresetScan ? await fetchPresetScan(options, url) : {
+          ok: true,
+          result: {
+            rows: [{ sessionId: "s1", finalPreset: "PresetA", headerPreset: "PresetA" }],
+            availablePresets: ["PresetA", "PresetB", "PresetC"]
+          }
+        };
       } else if (url === "/session-manager/api/batch") {
         const body = options?.body ? JSON.parse(options.body) : {};
         const items = (body.sessionIds || []).map(id => ({ sessionId: id, status: "success" }));
@@ -260,7 +279,20 @@ export function mountClient({ sessions = [], current = "", archivedIds = [], wor
     setFetcher(next) { response = next; }, setAnnotationFetcher(next) { annotationFetch = next; }, setAnnotationSaver(next) { annotationSave = next; },
     setAnnotations(next) { annotationData = Object.fromEntries(Object.entries(next).map(([id, value]) => [id, { ...DEFAULT_ANNOTATION, revision: 1, ...value }])); },
     async focus() { for (const fn of listeners.get("focus") ?? []) fn(); return api.flush(); },
-    keydown(event) { for (const handler of listeners.get("keydown") ?? []) handler(event); },
+    keydown(event) {
+      let stopped = false;
+      const e = {
+        defaultPrevented: false,
+        preventDefault() { this.defaultPrevented = true; },
+        stopPropagation() { stopped = true; },
+        stopImmediatePropagation() { stopped = true; },
+        ...event
+      };
+      for (const handler of listeners.get("keydown") ?? []) {
+        handler(e);
+        if (stopped) break;
+      }
+    },
     isOpen() { return nodes(footerHost.render(), node => typeof node.type === "function" && node.type.prototype?.render).length > 0; },
     // Spy on ctx.sessions.open() calls triggered by the Session Manager row
     // Open button. Each entry is the session id passed to open().
@@ -268,6 +300,8 @@ export function mountClient({ sessions = [], current = "", archivedIds = [], wor
     clearMainCalls: clearMainCalls,
     refreshCalls: refreshCalls,
     window: window,
+    dispatchWindowEvent(type, event) { for (const handler of listeners.get(type) ?? []) handler(event || { type }); },
+    setWindowDimensions(width, height) { if (width !== undefined) window.innerWidth = width; if (height !== undefined) window.innerHeight = height; },
     dispose() { dialogHost?.dispose(); headerHost?.dispose(); panelHost.dispose(); footerHost.dispose(); for (const cleanup of pluginCleanup) cleanup(); },
   };
   return api;

@@ -958,6 +958,17 @@ test("panel: .sm-bulkDialog .sm-nativeDialogConfirm and Danger rules follow the 
   assert.match(SRC.slice(dangerIdx, dangerIdx + 320), /border-color:var\(--dsw-alias-state-error-primary/);
 });
 
+test("panel: .sm-panelDialog and .sm-annotationDialog confirm rule follows base button rule and paints blue", async t => {
+  const baseIdx = SRC.indexOf(".sm-panelDialog .sm-nativeDialogButton{");
+  const confirmIdx = SRC.indexOf(".sm-panelDialog .sm-nativeDialogConfirm", baseIdx);
+  assert.ok(baseIdx > 0, "base panel dialog button rule must exist");
+  assert.ok(confirmIdx > baseIdx, "panel dialog confirm rule must come AFTER the base button rule (source-order wins over transparent)");
+  assert.match(SRC.slice(confirmIdx, confirmIdx + 300), /background:var\(--dsw-alias-state-business-primary/);
+  assert.match(SRC.slice(confirmIdx, confirmIdx + 300), /color:var\(--dsw-alias-label-primary-foreground/);
+  assert.match(SRC.slice(confirmIdx, confirmIdx + 300), /border-color:var\(--dsw-alias-state-business-primary/);
+  assert.match(SRC.slice(confirmIdx, confirmIdx + 450), /filter:brightness\(\.94\)/);
+});
+
 test("panel: BulkActionBar uses bulk.moveBtn for the move button (short label fits the 6-col grid)", async t => {
   // The 6-column grid leaves limited width per button, so the English
   // "Move to workspace" label overflows. The button must use a short

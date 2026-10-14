@@ -15,11 +15,11 @@ const SRC = readFileSync(new URL("../lib/client.js", import.meta.url), "utf8");
 // 1. Static CSS and Architecture Guards (§5, §6)
 // =========================================================================
 
-test("header-responsive: DSH container query rules defined for 720px and 520px", () => {
+test("header-responsive: DSH container query rules defined for 1000px and 520px", () => {
   // Container query for medium width: 32x32 square icon-only, hide labels/badge
-  assert.match(SRC, /@container\s*\(max-width:720px\)\s*\{[\s\S]*?\.sm-headerBtn\s*\{[^}]*width:32px[^}]*height:32px/);
-  assert.match(SRC, /@container\s*\(max-width:720px\)\s*\{[\s\S]*?\.sm-headerBtnLabel[^}]*display:none/);
-  assert.match(SRC, /@container\s*\(max-width:720px\)\s*\{[\s\S]*?\.sm-priorityBadge[^}]*display:none/);
+  assert.match(SRC, /@container\s*\(max-width:1000px\)\s*\{[\s\S]*?\.sm-headerBtn\s*\{[^}]*width:32px[^}]*height:32px/);
+  assert.match(SRC, /@container\s*\(max-width:1000px\)\s*\{[\s\S]*?\.sm-headerBtnLabel[^}]*display:none/);
+  assert.match(SRC, /@container\s*\(max-width:1000px\)\s*\{[\s\S]*?\.sm-priorityBadge[^}]*display:none/);
 
   // Container query for narrow width: fold secondary actions into compact menu
   assert.match(SRC, /@container\s*\(max-width:520px\)\s*\{[\s\S]*?\.sm-headerSecondaryActions[^}]*display:none!important/);

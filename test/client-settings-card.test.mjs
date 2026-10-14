@@ -49,13 +49,33 @@ test("Settings Card: renders title, version badge, sections and GitHub repositor
   const starLink = links.find(a => a.props?.href === "https://github.com/hkkz9522/dsh-session-manager" && a.props?.className?.includes("sm-settingsBadgeLink"));
   assert.ok(starLink, "Star badge link must be present");
   assert.ok(text(starLink).includes(harness.t("settings.star")), "Star link must contain star label");
+  assert.equal(starLink.props.title, undefined, "Star link must not use native title attribute");
+  assert.equal(starLink.props["aria-label"], harness.t("settings.star.tip"), "Star link must have aria-label matching tip");
 
   const issueLink = links.find(a => a.props?.href === "https://github.com/hkkz9522/dsh-session-manager/issues");
   assert.ok(issueLink, "Issues badge link must be present");
   assert.ok(text(issueLink).includes(harness.t("settings.feedback")), "Issue link must contain feedback label");
+  assert.equal(issueLink.props.title, undefined, "Issue link must not use native title attribute");
+  assert.equal(issueLink.props["aria-label"], harness.t("settings.feedback.tip"), "Issue link must have aria-label matching tip");
 
   host.dispose();
   harness.dispose();
+});
+
+test("Settings Card: star and feedback badges use renderTip to match panel header tooltip format", () => {
+  const src = readFileSync(new URL("../lib/client.js", import.meta.url), "utf8");
+  assert.match(
+    src,
+    /renderTip\(t\("settings\.star\.tip"\),\s*h\("a",\s*\{[\s\S]*?className:\s*"sm-settingsBadgeLink"[\s\S]*?"aria-label":\s*t\("settings\.star\.tip"\)/
+  );
+  assert.match(
+    src,
+    /renderTip\(t\("settings\.feedback\.tip"\),\s*h\("a",\s*\{[\s\S]*?className:\s*"sm-settingsBadgeLink"[\s\S]*?"aria-label":\s*t\("settings\.feedback\.tip"\)/
+  );
+  assert.ok(
+    !/className:\s*"sm-settingsBadgeLink"[^}]*title:/.test(src),
+    "sm-settingsBadgeLink must not have a native title attribute"
+  );
 });
 
 test("Settings Card: auto-check toggle updates updateStore and localStorage", () => {

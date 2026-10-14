@@ -110,16 +110,13 @@ test("ISO/numeric timestamps sort consistently; ties stay stable and unknown tim
   assert.ok(!text(app.tree).includes("NaN"));
 });
 
-test("reset restores search, workspace, archive state and default sort together", async t => {
+test("all filter button switches archive state back to all", async t => {
   const app = await setup(t);
-  await app.change("工作区", "workspace:one"); await app.change("排序", "created-asc");
-  await app.change("搜索标题、ID、标签或备注", "Beta"); await app.click("已归档");
-  await app.click("重置筛选");
-  assert.equal(app.control("搜索标题、ID、标签或备注").props.value, "");
-  assert.equal(app.control("工作区").props.value, "all");
-  assert.equal(app.control("排序").props.value, "updated-desc");
-  assert.deepEqual(app.rowIds(), ["A-101", "B-202", "C-303"]);
+  await app.click("已归档");
+  assert.equal(app.find(node => node.type === "button" && text(node) === "已归档")[0].props["aria-pressed"], true);
+  await app.click("全部");
   assert.equal(app.find(node => node.type === "button" && text(node) === "全部")[0].props["aria-pressed"], true);
+  assert.deepEqual(app.rowIds(), ["A-101", "B-202", "C-303"]);
 });
 
 test("current blank session remains visible and is searchable by its localized title", async t => {
@@ -208,7 +205,8 @@ test("English controls and counts are translated", async t => {
   await app.change("Sort by", "created-desc");
   assert.deepEqual(app.rowIds(), ["B-202"]);
   assert.ok(text(app.tree).includes("Showing 1 / 3 sessions"));
-  await app.click("Reset filters");
+  await app.change("Search title, ID, tags or notes", "");
+  await app.change("Workspace", "all");
   assert.equal(app.rowIds().length, 3);
 });
 
@@ -364,9 +362,9 @@ test("panel: 8 buttons in toolbar across 3 groups (5 filters + bulk-mode toggle 
   assert.equal(labels[2], "已归档");
   assert.equal(labels[3], "★ 收藏");
   assert.equal(labels[4], "◷ 待回看");
-  // The 6th button is the bulk-mode toggle (now positioned left of 全选当前筛选).
+  // The 6th button is the bulk-mode toggle (now positioned left of 全选筛选).
   assert.match(labels[5], /批量处理|退出批量处理/);
-  assert.equal(labels[6], "全选当前筛选");
+  assert.equal(labels[6], "全选筛选");
   assert.equal(labels[7], "清空选择");
 });
 
@@ -418,21 +416,26 @@ test("panel: toolbar has two button groups on row 1 and count+reset on row 2", a
   assert.equal(spacer.length, 1, "sm-markFiltersSpacer must sit between the two groups");
   // Group 2: bulk-mode toggle + 2 bulk toggles, ADJACENT (no spacer between them)
   const group2Buttons = nodes(groups[1], n => n.type === "button");
-  assert.equal(group2Buttons.length, 3, "group 2 must hold 3 buttons (批量处理 + 全选当前筛选 + 清空选择)");
+  assert.equal(group2Buttons.length, 3, "group 2 must hold 3 buttons (批量处理 + 全选筛选 + 清空选择)");
   assert.match(text(group2Buttons[0]), /批量处理|退出批量处理/);
-  assert.equal(text(group2Buttons[1]), "全选当前筛选");
+  assert.equal(text(group2Buttons[1]), "全选筛选");
   assert.equal(text(group2Buttons[2]), "清空选择");
-  // Row 2: count + reset live in sm-resultSummary (NOT inside sm-markFilters)
+  // Row 2: count lives in sm-resultSummary (NOT inside sm-markFilters)
   const summary = nodes(app.tree[0], n => n.props && n.props.className === "sm-resultSummary");
   assert.equal(summary.length, 1, "sm-resultSummary must exist as the dedicated row 2");
   const countNode = nodes(summary[0], n => n.props && n.props.role === "status")[0];
   assert.ok(countNode, "sm-resultSummary must host the count <span>");
   assert.match(countNode.props.children.join ? countNode.props.children.join("") : String(countNode.props.children), /显示.*个会话/);
-  // The reset button only appears once a view change is active. Force one.
+  // Reset button appears in sessions panel summary when hasViewChanges is active
   await app.click("已归档");
   const summaryAfter = nodes(app.tree[0], n => n.props && n.props.className === "sm-resultSummary")[0];
   const resetBtn = nodes(summaryAfter, n => n.props && n.props.className === "sm-resetFilters")[0];
-  assert.ok(resetBtn, "sm-resetFilters must appear on row 2 once any view change is active");
+  assert.ok(resetBtn, "sm-resetFilters must appear in session panel summary when filter changes");
+  assert.equal(text(resetBtn), "重置筛选");
+  await app.click("重置筛选");
+  const summaryReset = nodes(app.tree[0], n => n.props && n.props.className === "sm-resultSummary")[0];
+  const resetBtnGone = nodes(summaryReset, n => n.props && n.props.className === "sm-resetFilters")[0];
+  assert.equal(resetBtnGone, undefined, "sm-resetFilters disappears after resetting view");
 });
 
 test("panel: row has a permanent checkbox slot so layout is identical in and out of bulk mode", async t => {
@@ -551,9 +554,10 @@ test("panel: bulk-mode toggle is ADJACENT to 全选当前筛选 (no spacer betwe
     workspaces: [{ id: "ws1", title: "ws1" }],
   });
 
-  // 1. Header carries only the close button.
+  // 1. Header carries only the close button in its actions area.
   const header = nodes(app.tree[0], n => n.props && n.props.className === "sm-nativeDialogHeader")[0];
-  const headerButtons = nodes(header, n => n.type === "button");
+  const headerActions = nodes(header, n => n.props && n.props.className === "sm-nativeDialogHeaderActions")[0];
+  const headerButtons = nodes(headerActions, n => n.type === "button");
   assert.equal(headerButtons.length, 1, "header must contain only the close button");
   assert.equal(headerButtons[0].props.className, "sm-panelHeaderClose");
 
@@ -563,11 +567,11 @@ test("panel: bulk-mode toggle is ADJACENT to 全选当前筛选 (no spacer betwe
   assert.equal(groups.length, 2, "sm-markFilters must contain 2 groups: filter buttons + bulk controls");
 
   // 3. Group 2 (bulk controls) has 3 buttons in the right order:
-  //    批量处理 (toggle) → 全选当前筛选 → 清空选择 (all adjacent, no spacer between them).
+  //    批量处理 (toggle) → 全选筛选 → 清空选择 (all adjacent, no spacer between them).
   const group2Buttons = nodes(groups[1], n => n.type === "button");
   assert.equal(group2Buttons.length, 3, "bulk controls group must hold 3 buttons (批量处理 + 全选 + 清空)");
   assert.match(text(group2Buttons[0]), /批量处理|退出批量处理/);
-  assert.equal(text(group2Buttons[1]), "全选当前筛选");
+  assert.equal(text(group2Buttons[1]), "全选筛选");
   assert.equal(text(group2Buttons[2]), "清空选择");
 
   // 4. BulkActionBar is NOT inline in the toolbar; it lives on its own row.

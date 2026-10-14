@@ -73,7 +73,7 @@ test("lib/client.js: CSS rules for rail and wide variants exist", () => {
 test("FooterAction renders wide button with icon + label when props.wide is true", () => {
   const api = mountClient({ wide: true });
   try {
-    const buttons = nodes(api.footerTree, node => node.type === "button" && node.props && node.props["aria-label"] === "会话管理");
+    const buttons = nodes(api.footerTree, node => node.type === "button" && node.props && node.props["aria-label"] === "会话与工作区");
     assert.equal(buttons.length, 1, "expected one wide footer button");
     const btn = buttons[0];
     assert.ok(
@@ -87,7 +87,7 @@ test("FooterAction renders wide button with icon + label when props.wide is true
     assert.ok(!btn.props.title, "wide button should not duplicate the label as a title");
     const labels = nodes([btn], node => node.props && node.props.className === "sm-footerBtn-label");
     assert.equal(labels.length, 1, "wide button must render a label span");
-    assert.equal(text(labels[0]), "会话管理");
+    assert.equal(text(labels[0]), "会话与工作区");
   } finally {
     api.dispose();
   }
@@ -96,7 +96,7 @@ test("FooterAction renders wide button with icon + label when props.wide is true
 test("FooterAction renders rail button as icon-only when props.wide is false", () => {
   const api = mountClient({ wide: false });
   try {
-    const buttons = nodes(api.footerTree, node => node.type === "button" && node.props && node.props["aria-label"] === "会话管理");
+    const buttons = nodes(api.footerTree, node => node.type === "button" && node.props && node.props["aria-label"] === "会话与工作区");
     assert.equal(buttons.length, 1, "expected one rail footer button");
     const btn = buttons[0];
     assert.ok(
@@ -107,7 +107,7 @@ test("FooterAction renders rail button as icon-only when props.wide is false", (
       !btn.props.className.includes("sm-footerBtn-wide"),
       "rail button must not carry sm-footerBtn-wide; got " + btn.props.className,
     );
-    assert.equal(btn.props.title, "会话管理", "rail button must expose its label via the title attribute for hover");
+    assert.equal(btn.props.title, "会话与工作区", "rail button must expose its label via the title attribute for hover");
     const labels = nodes([btn], node => node.props && node.props.className === "sm-footerBtn-label");
     assert.equal(labels.length, 0, "rail button must not render a label span");
   } finally {
@@ -124,7 +124,7 @@ test("FooterAction wires its click handler in both wide and rail variants", () =
   for (const wide of [true, false]) {
     const api = mountClient({ wide });
     try {
-      const btn = nodes(api.footerTree, node => node.type === "button" && node.props && node.props["aria-label"] === "会话管理")[0];
+      const btn = nodes(api.footerTree, node => node.type === "button" && node.props && node.props["aria-label"] === "会话与工作区")[0];
       assert.ok(btn, "FooterAction must render its button when wide=" + wide);
       assert.equal(typeof btn.props.onClick, "function", "onClick must be wired when wide=" + wide);
       const openedBefore = api.isOpen();

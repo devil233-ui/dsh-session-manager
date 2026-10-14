@@ -105,7 +105,79 @@ export function mountClient({ sessions = [], current = "", archivedIds = [], wor
     },
     getAttribute: () => "", setAttribute() {}, hasAttribute: () => false,
   };
-  const element = () => ({ dataset: {}, style: { setProperty() {}, removeProperty() {} }, getAttribute: () => "", setAttribute() {}, hasAttribute: () => false });
+  const element = (tag = "div") => {
+    const children = [];
+    const attrs = new Map();
+    const classSet = new Set();
+    const nodeListeners = new Map();
+    const node = {
+      tagName: String(tag).toUpperCase(),
+      dataset: {},
+      style: {
+        setProperty(name, value) { node.style[name] = String(value); },
+        removeProperty(name) { delete node.style[name]; },
+      },
+      children,
+      parentNode: null,
+      classList: {
+        add(...cs) { for (const c of cs) classSet.add(c); node.className = [...classSet].join(" "); },
+        remove(...cs) { for (const c of cs) classSet.delete(c); node.className = [...classSet].join(" "); },
+        contains(c) { return classSet.has(c); },
+        toggle(c, force) { if (force ?? !this.contains(c)) { this.add(c); return true; } else { this.remove(c); return false; } }
+      },
+      get className() { return [...classSet].join(" "); },
+      set className(val) {
+        classSet.clear();
+        for (const c of String(val || "").split(/\s+/).filter(Boolean)) classSet.add(c);
+      },
+      getAttribute: (k) => attrs.has(k) ? attrs.get(k) : (k === "class" ? node.className : null),
+      setAttribute(k, v) {
+        attrs.set(k, String(v));
+        if (k === "class") node.className = v;
+      },
+      removeAttribute(k) { attrs.delete(k); },
+      hasAttribute: (k) => attrs.has(k),
+      appendChild(child) {
+        if (!child) return child;
+        child.parentNode = node;
+        children.push(child);
+        return child;
+      },
+      removeChild(child) {
+        const idx = children.indexOf(child);
+        if (idx !== -1) {
+          children.splice(idx, 1);
+          child.parentNode = null;
+        }
+        return child;
+      },
+      remove() {
+        if (node.parentNode && typeof node.parentNode.removeChild === "function") {
+          node.parentNode.removeChild(node);
+        }
+      },
+      querySelector: (sel) => {
+        if (typeof sel === "string" && sel.startsWith(".")) {
+          const cls = sel.slice(1);
+          return children.find(c => c.classList?.contains(cls)) || null;
+        }
+        return null;
+      },
+      querySelectorAll: () => [],
+      addEventListener(type, fn) {
+        if (!nodeListeners.has(type)) nodeListeners.set(type, new Set());
+        nodeListeners.get(type).add(fn);
+      },
+      removeEventListener(type, fn) {
+        nodeListeners.get(type)?.delete(fn);
+      },
+      dispatchEvent(event) {
+        const type = event?.type || event;
+        for (const fn of nodeListeners.get(type) ?? []) fn(event);
+      }
+    };
+    return node;
+  };
   // Stylesheet tags the bundle appends to <head>. Kept so tests can assert the
   // rules that actually reach the DOM (and that a later load rewrites them
   // rather than reusing a stale tag).
@@ -123,7 +195,8 @@ export function mountClient({ sessions = [], current = "", archivedIds = [], wor
     return matchPluginCss(selector);
   };
   const head = { appendChild(node) { if (node && node.dataset) styleTags.push(node); } };
-  const document = { documentElement, body: element(), head, querySelector: matchSelector, querySelectorAll: () => [], createElement: element };
+  const body = element("body");
+  const document = { documentElement, body, head, querySelector: matchSelector, querySelectorAll: () => [], createElement: element };
   let exports;
   const window = {
     innerWidth, innerHeight, confirm, alert: message => alerts.push(message),
@@ -140,7 +213,7 @@ export function mountClient({ sessions = [], current = "", archivedIds = [], wor
   };
   const navigator = { clipboard: clipboardStub };
   runInNewContext(source, {
-    window, document, console, navigator, Error, AbortController, localStorage: localStorageStub,
+    window, document, console, navigator, Error, AbortController, Event: (typeof Event !== "undefined" ? Event : class Event { constructor(t) { this.type = t; } }), localStorage: localStorageStub,
     setInterval: () => 1, clearInterval() {}, setTimeout: () => 1, clearTimeout() {},
     getComputedStyle: () => ({ colorScheme: "light", backgroundColor: "rgb(255,255,255)" }),
     get __DSH_SM_TEST_UPDATE__() { return globalThis.__DSH_SM_TEST_UPDATE__; },
@@ -181,6 +254,14 @@ export function mountClient({ sessions = [], current = "", archivedIds = [], wor
             availablePresets: ["PresetA", "PresetB", "PresetC"]
           }
         };
+      } else if (url === "/session-manager/api/workspace-archive") {
+        const body = options?.body ? JSON.parse(options.body) : {};
+        data = { ok: true, result: body };
+      } else if (url === "/session-manager/api/workspace-unarchive") {
+        const body = options?.body ? JSON.parse(options.body) : {};
+        data = { ok: true, result: { unarchived: true, workspaceId: body.workspaceId } };
+      } else if (url === "/session-manager/api/workspace-archives") {
+        data = { ok: true, result: { archives: {} } };
       } else if (url === "/session-manager/api/batch") {
         const body = options?.body ? JSON.parse(options.body) : {};
         const items = (body.sessionIds || []).map(id => ({ sessionId: id, status: "success" }));
@@ -213,11 +294,29 @@ export function mountClient({ sessions = [], current = "", archivedIds = [], wor
       clearMain() { clearMainCalls.push("clearMain"); list = { ...list, current: "" }; ctx.uiWorkspace.mainReference = undefined; },
       startSession() { clearMainCalls.push("startSession"); list = { ...list, current: "" }; ctx.uiWorkspace.mainReference = undefined; },
       archiveSession: async (id) => { clearMainCalls.push("archiveSession:" + id); list = { ...list, current: "" }; ctx.uiWorkspace.mainReference = undefined; },
+      unarchiveSession: async (id) => { clearMainCalls.push("unarchiveSession:" + id); },
       mainReference: current ? { sessionId: current } : undefined,
     },
     workspaces: {
       archiveSession: async (id) => { clearMainCalls.push("archiveSession:" + id); },
-      refresh: async () => { refreshCalls.push("workspaces"); }
+      unarchiveSession: async (id) => { clearMainCalls.push("unarchiveSession:" + id); },
+      refresh: async () => { refreshCalls.push("workspaces"); },
+      list: {
+        items: workspaceData,
+        archivedSessionIds: archivedIds,
+        _snapshot: null,
+        getSnapshot() {
+          if (!this._snapshot || this._snapshot.items !== this.items || this._snapshot.archivedSessionIds !== this.archivedSessionIds) {
+            this._snapshot = { items: this.items, archivedSessionIds: this.archivedSessionIds };
+          }
+          return this._snapshot;
+        },
+        subscribe(listener) {
+          if (!listeners.has("workspaces.list")) listeners.set("workspaces.list", new Set());
+          listeners.get("workspaces.list").add(listener);
+          return () => listeners.get("workspaces.list")?.delete(listener);
+        }
+      }
     },
   };
   exports.apply(ctx);
@@ -237,6 +336,8 @@ export function mountClient({ sessions = [], current = "", archivedIds = [], wor
     get registered() { return registered; },
     get exports() { return exports; },
     get ctx() { return ctx; },
+    get window() { return window; },
+    get document() { return document; },
     get t() { return t; },
     get localStorage() { return localStorageStub; },
     /** Values written to documentElement.style via setProperty(). */
@@ -300,6 +401,7 @@ export function mountClient({ sessions = [], current = "", archivedIds = [], wor
     clearMainCalls: clearMainCalls,
     refreshCalls: refreshCalls,
     window: window,
+    document: document,
     dispatchWindowEvent(type, event) { for (const handler of listeners.get(type) ?? []) handler(event || { type }); },
     setWindowDimensions(width, height) { if (width !== undefined) window.innerWidth = width; if (height !== undefined) window.innerHeight = height; },
     dispose() { dialogHost?.dispose(); headerHost?.dispose(); panelHost.dispose(); footerHost.dispose(); for (const cleanup of pluginCleanup) cleanup(); },

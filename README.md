@@ -1,4 +1,4 @@
-# dsh-session-manager — session manager for DeepSeek Harness
+# dsh-session-manager — session and workspace manager for DeepSeek Harness
 
 English | [中文](README.zh.md)
 
@@ -9,9 +9,9 @@ English | [中文](README.zh.md)
 
 ## 0 Overview
 
-DeepSeek Harness session manager: delete, archive, move sessions across workspaces, migrate presets, favorites, review-later, search, filter, sort, prioritize, add tags and notes, and batch-manage sessions.
+DeepSeek Harness session and workspace manager —— Workspaces: archive and visibility. Sessions: move, migrate presets, delete, favorite, review later, prioritize, tag, and annotate. Batch operations.
 
-Verified with the official DSH Desktop client; see [5 Compatibility](#5-compatibility) for the current verification scope. Both environments use the same plugin Host/client functionality; environment-specific installation notes are documented below.
+Verified with the official DSH Desktop client; see [5 Compatibility](#5-compatibility) for the current verification scope. Both environments share the same plugin Host/client functionality; environment-specific installation notes are documented below.
 
 ## 1 Features
 
@@ -49,6 +49,17 @@ Verified with the official DSH Desktop client; see [5 Compatibility](#5-compatib
 - **Install Source (Registry)**: Select between **npm official registry** (`registry.npmjs.org`, default) and **China mainland mirror** (`registry.npmmirror.com`) in the Settings Card. Check for updates and download packages directly from the selected registry.
 - **Dialog opacity**: A 50%–100% slider (5% steps, default 100%) with a "Reset to default" button in the Settings Card's preferences section. Adjusts the background fill opacity of plugin dialogs in real time while keeping text, buttons, inputs, tags, and borders fully opaque.
 - **Theme**: Automatically follows the active DSH theme (including third-party theme plugins). Dialogs, settings cards, title-bar buttons, menus, inputs, and all other UI elements seamlessly adapt to light and dark themes.
+- **Unified dropdown styling**: All select dropdowns (sort, filter, priority) use unified shadow-free rounded custom floating menus matching active themes, strictly aligned with trigger widths, eliminating Chromium duplicate native popups.
+
+### 1.5 Workspace Archiving and Management (new in v0.7.0)
+
+- **Two-page tab switching**: Seamlessly switch between "Session Management" and "Workspace Management" in the dialog header, preserving each page's distinct search, filter, and sort states.
+- **Workspace list**: Displays all registered workspaces with title/name, physical path, session count, latest activity timestamp computed from member sessions, and right-side toggle switch.
+- **Search, filter, and sort**: Case-insensitive search across name and path; filter by All / Active / Archived; sort by Recently Updated, Earliest Updated, Name A-Z, or Name Z-A; counter display and adaptive toolbar wrapping.
+- **Toggle switch and archiving**:
+  - **Turn OFF (Archive)**: Pre-checks session activity (rejects safely if any session is running), cascades archiving to all unarchived member sessions, hides workspace from DSH native sidebar, and automatically rolls back if partial failure occurs.
+  - **Turn ON (Restore)**: Removes archive mark, restores workspace in native sidebar, unarchives member sessions previously archived by the workspace operation while keeping individually archived sessions intact. Creating an identical-path workspace restores visibility automatically.
+- **Native sidebar hiding without ungrouped spill**: Employs derived snapshot interception with session ID unioning into `archivedSessionIds` so hidden workspace sessions never spill into "Ungrouped", supporting dark/light themes and persistent recovery across DSH restarts.
 
 ## 2 UI entry points
 
@@ -123,6 +134,7 @@ After changing plugin dependencies, `package.json`, bundle configuration, or oth
 - The management list hides subagent sessions and the move API rejects them. Blank sessions without a persisted artifact cannot be moved.
 - Cold rewrites preserve the artifact's stored format (V1 / V2 / V3 / V4 are all readable; the plugin never forces an upgrade). Moves and rewrites refuse corrupt / truncated Zstd logs or JSONL logs with incomplete final lines instead of publishing partial history.
 - Preset migration separates backup, publication and rollback. If rollback fails, recovery files are retained and their paths are included in the error; do not remove them.
+- **Workspace archiving rollback protection**: archiving is refused if active sessions are present, and batch session archiving automatically rolls back on partial failures to preserve state consistency.
 - Incomplete startup scans skip workspace reconciliation. Complete scans preserve live sessions and any membership added during the scan.
 - Plugin mutations are serialized per session and request bodies are limited to 64 KiB. This queue supplements, rather than replaces, DSH's own persistence coordination.
 
@@ -134,7 +146,7 @@ DSH versions are shown above plugin versions; each column represents a tested ve
 
 | v0.2.0-rc.2 | v0.1.7-rc.2 | v0.1.7-rc.1 |
 | --- | --- | --- |
-| 0.6.4, 0.6.3, 0.6.2, 0.5.4 | 0.5.3 | 0.5.2 |
+| 0.7.0, 0.6.4, 0.6.3, 0.6.2, 0.5.4 | 0.5.3 | 0.5.2 |
 
 | v0.1.6-alpha.2 | v0.1.5-rc.2 | v0.1.5-rc.1 |
 | --- | --- | --- |

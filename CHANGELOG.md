@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.7.0 — 2026-10-15
+
+- **fix(ui)**: Unify select dropdown styling across all dialogs and panels with shadow-free custom floating menus, strictly align popup width with triggers, and isolate pointer events to eliminate duplicate native OS popups on Chromium.
+- **fix(ui)**: Fix workspace bulk action buttons wrapping to next row when overflowing in English mode, preventing the unarchive button from exceeding the window boundary.
+- **fix(ui)**: Align dropdown trigger box width and dropdown menu content width in workspace management panel.
+- **fix(ui)**: Make workspace management toolbar buttons adaptively wrap when the window narrows, matching session management panel behavior.
+- **feat(workspace)**: Automatically reveal and restore archived workspaces when creating a workspace with an identical directory path.
+- **feat(workspace)**: Add Workspace Management tab to the Session Manager panel with dedicated search, active/archived filters, and update-time & alphabetical sorting.
+- **feat(workspace)**: Support single and bulk workspace archiving via toggle switch and bulk actions without secondary confirmation.
+- **fix(ui)**: Remove hover tooltip on workspace switch and stabilize layout against window jitter during hover and toggle.
+- **ui**: Reorder workspace toolbar with sort dropdown placed after the active filter button, with responsive multi-row layout for bulk action controls.
+- **ui**: Simplify select-all button label to "Select All Filtered" in both session and workspace management panels.
+- **ui**: Remove duplicate "Reset Filters" button in the Session Management panel.
+- **feat(workspace)**: Support workspace restoration, unarchiving only sessions archived during the workspace archive operation while keeping individually archived sessions intact.
+- **feat(workspace)**: Support workspace bulk management with selection mode, row checkboxes, select-all/clear, and bulk archive/unarchive controls aligned on the same toolbar row as filters and sort.
+- **feat(workspace)**: Consolidate workspace toolbar row layout placing sort dropdown, filter buttons, and bulk action buttons on a single harmonious row.
+- **feat(workspace)**: Robust workspace and session update timestamp extraction supporting live member sessions, backend cache, and filesystem mtimes.
+- **feat(sessions)**: Add Name Ascending (`name-asc`) and Name Descending (`name-desc`) sorting in both session management and workspace management.
+- **ui**: Rename sidebar footer entry from "Sessions" to "Sessions & Workspaces".
+- **feat(workspace)**: Integrate native DSH sidebar hiding via wrapped `workspaces.list.getSnapshot()`, filtering hidden workspaces and merging session IDs into `archivedSessionIds` so sessions never spill into "Ungrouped".
+- **feat(workspace)**: Durable host-side persistence in `workspace-archives.v1.json` with file locking, and zero-flash synchronous `localStorage` caching with automatic migration from legacy `dsh-workspace-hide.hidden.v2`.
+- **feat(safety)**: Refuse workspace archiving if any session has running activity, and implement automatic rollback on partial archive failures.
+- **test**: Add comprehensive test suites covering workspace listing, search/filter/sort, toggle archiving/unarchiving, bulk mode and batch archive/unarchive, sidebar hiding, ungrouped isolation, running session safety, and failure rollbacks.
+
 ## 0.6.4 — 2026-10-13
 
 - **fix(ui)**: Portal `SessionManagerPanel` into `#dsh-session-manager-overlay-root` to resolve overlay occlusion and interaction blocking by DSH sidebar/main view (#28).

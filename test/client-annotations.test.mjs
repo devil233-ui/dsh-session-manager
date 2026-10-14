@@ -60,13 +60,16 @@ test("favorite, review, tag and priority filters combine with metadata search an
   } });
   await app.clickLabel("收藏筛选"); assert.deepEqual(app.rowIds(), ["a", "c"]);
   await app.clickLabel("待回看筛选"); assert.deepEqual(app.rowIds(), ["c"]);
-  // Reset filters first so the priority filter applies to every session.
-  await app.click("重置筛选");
+  // Untoggle filters first so the priority filter applies to every session.
+  await app.clickLabel("待回看筛选");
+  await app.clickLabel("收藏筛选");
   await app.change("按优先级筛选", "3");
   // b explicitly has priority 3; c falls back to 3 because it has no priority set.
   assert.deepEqual(app.rowIds().sort(), ["b", "c"]);
   await app.change("搜索标题、ID、标签或备注", "api REVIEW"); assert.deepEqual(app.rowIds(), ["c"]);
-  await app.click("重置筛选"); assert.deepEqual(app.rowIds(), ["a", "b", "c"]);
+  await app.change("搜索标题、ID、标签或备注", "");
+  await app.change("按优先级筛选", "all");
+  assert.deepEqual(app.rowIds(), ["a", "b", "c"]);
   await app.change("搜索标题、ID、标签或备注", "windows"); assert.deepEqual(app.rowIds(), ["a"]);
   await app.change("搜索标题、ID、标签或备注", "bug"); assert.deepEqual(app.rowIds(), ["b"]);
   assert.equal(app.requests.filter(r => r.url.endsWith("/annotations") && r.options?.method !== "POST").length, 1);

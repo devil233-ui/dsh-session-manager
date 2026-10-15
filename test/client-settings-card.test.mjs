@@ -58,6 +58,9 @@ test("Settings Card: renders title, version badge, sections and GitHub repositor
   assert.equal(issueLink.props.title, undefined, "Issue link must not use native title attribute");
   assert.equal(issueLink.props["aria-label"], harness.t("settings.feedback.tip"), "Issue link must have aria-label matching tip");
 
+  const badgeActions = nodes(host.tree, n => n.props?.className === "sm-settingsBadgeActions");
+  assert.equal(badgeActions.length, 1, "sm-settingsBadgeActions must wrap star and feedback badges to right-align them");
+
   host.dispose();
   harness.dispose();
 });
@@ -201,6 +204,8 @@ test("Settings Card & UpdateDialog: follow DSH theme tokens instead of a private
   assert.match(src, /\.sm-settingsSelect\{[^}]*background:var\(--dsw-alias-bg-layer-2/);
   assert.match(src, /\.sm-settingsTag\{[^}]*background:var\(--dsw-alias-markdown-tag/);
   assert.match(src, /\.sm-settingsBadgeLink\{[^}]*background:var\(--dsw-alias-markdown-tag/);
+  assert.match(src, /\.sm-settingsBadgeActions\{display:flex;align-items:center;gap:8px;margin-left:auto;flex-shrink:0\}/);
+  assert.match(src, /\.sm-settingsRow>span:first-child\{white-space:nowrap;flex-shrink:0\}/);
   assert.match(src, /\.sm-updateVersionGrid\{[^}]*background:var\(--dsw-alias-bg-layer-2/);
   assert.match(src, /\.sm-updateVersionLabel\{color:var\(--dsw-alias-label-secondary/);
   assert.match(src, /\.sm-updateVersionValue\{color:var\(--dsw-alias-label-primary/);
@@ -216,6 +221,7 @@ test("Settings Card: registry selector renders options and persists choice", () 
   const selects = nodes(host.tree, n => n.type === "select");
   const registrySelect = selects.find(s => s.props?.["aria-label"] === harness.t("settings.registry"));
   assert.ok(registrySelect, "Registry select dropdown must be present");
+  assert.equal(registrySelect.props.className, "sm-settingsSelect", "Registry select must use sm-settingsSelect without full-width sm-viewSelect");
 
   // Default value is npm official
   assert.equal(registrySelect.props.value, "registry.npmjs.org");

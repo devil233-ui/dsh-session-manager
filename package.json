@@ -1,7 +1,7 @@
 {
   "name": "dsh-session-manager",
-  "version": "0.7.0",
-  "description": "All-in-one session and workspace manager for DeepSeek Harness: lifecycle control (delete, archive, move, preset migration), workspace archiving & sidebar hiding, annotations (favorites, review-later, priority, tags, notes), search, and batch actions. | 专为 DeepSeek Harness 打造的一站式会话与工作区管理插件：支持会话生命周期管理、工作区归档与隐藏、多维标注、智能筛选排序及高效批量操作。",
+  "version": "0.7.1",
+  "description": "DeepSeek Harness session and workspace manager —— Workspaces: archive and visibility. Sessions: move, migrate presets, delete, favorite, review later, prioritize, tag, and annotate. Batch operations. | DSH 会话与工作区管理——工作区：归档与显示。会话：跨工作区移动、预设迁移、删除；收藏、待回看、优先级、标签、备注。批量操作。",
   "license": "MIT",
   "keywords": [
     "dsh",

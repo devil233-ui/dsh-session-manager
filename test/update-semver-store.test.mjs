@@ -250,6 +250,7 @@ test("updateStore: respects window.__DSH_SM_TEST_UPDATE__ dev override", async (
 test("updateStore: window.__DSH_SM_TEST_UPDATE__ error simulation", async () => {
   const harness = mountClient();
   const updateStore = harness.exports.updateStore;
+  updateStore.state.status = "idle";
 
   const prevOverride = globalThis.window?.__DSH_SM_TEST_UPDATE__;
   try {

@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.7.1 — 2026-10-15
+
+- **fix(cache)**: Decouple boot-time workspace session membership reconciliation from projection cache reconstruction, preventing background event-loop blocking and watchdog recovery timeouts on large session libraries (#32).
+- **fix(cache)**: Fix projection cache reconstruction error on packed rows (e.g. `tool-call-chunks` without sequential `seq`); prioritize official `adapter.openSessionRead()` logical events and safely skip unmigrated physical rows during disk fallback without triggering missing seq warnings (#32).
+- **fix(move)**: Preserve source artifact filename and generation version when moving cold sessions across workspaces, preventing forged `version: 4` headers on unmigrated physical event content (#32).
+- **fix(safety)**: Safely skip corrupted JSON lines and unresolvable seeded session boundaries during cache refold, preserving original session artifacts without poisoning projection caches (#32).
+- **feat(perf)**: Introduce budget controls (50 sessions max, 2000ms timeout, 5MB artifact limit) and event-loop yielding (`setImmediate`) during boot projection cache sweeps (#32).
+- **feat(update)**: Support on-demand silent update checks when opening session manager panel with a 6-hour interval, 30-minute failure cooldown, and concurrent request protection.
+- **feat(ui)**: Refine settings card layout and preferences order (Auto-check -> Registry -> Opacity), harmonize control widths, and inline background opacity description hint.
+- **test**: Add comprehensive regression tests covering packed rows, old format moves, cache hits/misses, large history library budget limits, post-move cache consistency (#32), and on-demand panel update checks.
+
 ## 0.7.0 — 2026-10-15
 
 - **fix(ui)**: Unify select dropdown styling across all dialogs and panels with shadow-free custom floating menus, strictly align popup width with triggers, and isolate pointer events to eliminate duplicate native OS popups on Chromium.

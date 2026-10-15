@@ -543,3 +543,164 @@ test("issue #34 & #33: confirm button is disabled and clicks guarded when previe
   harness.dispose();
 });
 
+test("issue #34: stacked dialogs: clicking underlying dialog cancels ONLY the topmost dialog and intercepts the click", async () => {
+  const harness = mountClient();
+  const { MoveDialog, ConfirmDialog } = harness.exports;
+
+  let moveCancelled = false;
+  let confirmCancelled = false;
+
+  // Mount Dialog 1 (MoveDialog, bottom)
+  const moveComp = harness.mountComponent(MoveDialog, {
+    open: true,
+    workspaces: [{ id: "ws1", title: "WS 1" }],
+    onCancel: () => { moveCancelled = true; }
+  });
+
+  // Mount Dialog 2 (ConfirmDialog, top)
+  const confirmComp = harness.mountComponent(ConfirmDialog, {
+    open: true,
+    title: "Confirm on top of Move",
+    onCancel: () => { confirmCancelled = true; }
+  });
+
+  await new Promise(r => setTimeout(r, 60));
+
+  // 1. Click on a button inside MoveDialog (underlying dialog)
+  const moveBtn = nodes(moveComp.tree, n => n.type === "button")[0];
+  assert.ok(moveBtn, "Underlying MoveDialog must have buttons");
+
+  const clickEvent = harness.dispatchClick(moveBtn);
+
+  // Event must have been intercepted (default prevented / propagation stopped)
+  assert.equal(clickEvent.stopped, true, "Click on underlying dialog must be intercepted by topmost dialog");
+  assert.equal(clickEvent.defaultPrevented, true, "Default action must be prevented on underlying click");
+  assert.equal(confirmCancelled, true, "Topmost ConfirmDialog must be cancelled");
+  assert.equal(moveCancelled, false, "Underlying MoveDialog must NOT be cancelled");
+
+  // Dispose the closed ConfirmDialog (simulates unmount in React)
+  confirmComp.dispose();
+
+  // 2. Now MoveDialog is topmost. Clicking outside should close MoveDialog.
+  harness.dispatchWindowEvent("click", {
+    type: "click",
+    defaultPrevented: false,
+    target: { closest() { return null; } }
+  });
+  assert.equal(moveCancelled, true, "MoveDialog cancels on next outside click once topmost");
+
+  moveComp.dispose();
+  harness.dispose();
+});
+
+test("issue #34: stacked dialogs: Esc closes topmost dialog only in sequence", async () => {
+  const harness = mountClient();
+  const { MoveDialog, ConfirmDialog } = harness.exports;
+
+  let moveCancelled = false;
+  let confirmCancelled = false;
+
+  const moveComp = harness.mountComponent(MoveDialog, {
+    open: true,
+    workspaces: [{ id: "ws1", title: "WS 1" }],
+    onCancel: () => { moveCancelled = true; }
+  });
+
+  const confirmComp = harness.mountComponent(ConfirmDialog, {
+    open: true,
+    title: "Confirm on top",
+    onCancel: () => { confirmCancelled = true; }
+  });
+
+  // 1. First Esc: only topmost (ConfirmDialog) cancels
+  harness.keydown({ key: "Escape" });
+  assert.equal(confirmCancelled, true, "First Esc closes topmost ConfirmDialog");
+  assert.equal(moveCancelled, false, "First Esc must NOT close underlying MoveDialog");
+
+  confirmComp.dispose();
+
+  // 2. Second Esc: MoveDialog now cancels
+  harness.keydown({ key: "Escape" });
+  assert.equal(moveCancelled, true, "Second Esc closes remaining MoveDialog");
+
+  moveComp.dispose();
+  harness.dispose();
+});
+
+test("issue #34: stacked bulk dialogs: clicking underlying dialog cancels only topmost bulk dialog", async () => {
+  const harness = mountClient();
+  const { BatchPreviewDialog, BulkTagInputDialog } = harness.exports;
+
+  let previewCancelled = false;
+  let tagCancelled = false;
+
+  const previewComp = harness.mountComponent(BatchPreviewDialog, {
+    open: true,
+    action: "delete",
+    actionLabel: "删除",
+    sessions: [{ id: "s1" }],
+    onCancel: () => { previewCancelled = true; }
+  });
+
+  const tagComp = harness.mountComponent(BulkTagInputDialog, {
+    open: true,
+    title: "Add tags on top",
+    onCancel: () => { tagCancelled = true; }
+  });
+
+  await new Promise(r => setTimeout(r, 60));
+
+  // Click on BatchPreviewDialog's inner element
+  const previewInner = nodes(previewComp.tree, n => n.type === "div" && n.props?.className?.includes("sm-bulkDialogSummary"))[0];
+  assert.ok(previewInner, "BatchPreviewDialog inner summary must exist");
+
+  const clickEvent = harness.dispatchClick(previewInner);
+
+  assert.equal(clickEvent.stopped, true, "Click on underlying bulk dialog must be intercepted by topmost bulk dialog");
+  assert.equal(clickEvent.defaultPrevented, true, "Default action must be prevented on underlying click");
+  assert.equal(tagCancelled, true, "Topmost BulkTagInputDialog must be cancelled");
+  assert.equal(previewCancelled, false, "Underlying BatchPreviewDialog must remain open");
+
+  tagComp.dispose();
+  previewComp.dispose();
+  harness.dispose();
+});
+
+test("issue #34: clicking inside topmost dialog in stacked dialogs does not cancel either dialog", async () => {
+  const harness = mountClient();
+  const { MoveDialog, ConfirmDialog } = harness.exports;
+
+  let moveCancelled = false;
+  let confirmCancelled = false;
+
+  const moveComp = harness.mountComponent(MoveDialog, {
+    open: true,
+    workspaces: [{ id: "ws1", title: "WS 1" }],
+    onCancel: () => { moveCancelled = true; }
+  });
+
+  const confirmComp = harness.mountComponent(ConfirmDialog, {
+    open: true,
+    title: "Topmost Confirm",
+    onCancel: () => { confirmCancelled = true; }
+  });
+
+  await new Promise(r => setTimeout(r, 60));
+
+  // Click inside ConfirmDialog's own section
+  const confirmBtn = nodes(confirmComp.tree, n => n.type === "button")[0];
+  assert.ok(confirmBtn, "ConfirmDialog button must exist");
+
+  harness.dispatchWindowEvent("click", {
+    type: "click",
+    defaultPrevented: false,
+    target: confirmBtn
+  });
+
+  assert.equal(confirmCancelled, false, "Clicking inside topmost dialog must NOT cancel it");
+  assert.equal(moveCancelled, false, "Clicking inside topmost dialog must NOT cancel underlying dialog");
+
+  confirmComp.dispose();
+  moveComp.dispose();
+  harness.dispose();
+});

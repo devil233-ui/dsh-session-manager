@@ -464,3 +464,120 @@ test("issue #33: subagent archive record cleanup failure aggregates warning with
     assert.equal(exists, false, `Session artifact '${id}' should have been removed`);
   }
 });
+
+test("issue #33: /delete accurately reports partial failure when all subagents deleted but parent deletion fails", async t => {
+  const f = await fixture(t);
+
+  await f.stage({ id: "p-fail", header: { origin: "user" } });
+  await f.stage({ id: "sub-p1", header: { origin: "subagent", parentSession: "p-fail" } });
+  await f.stage({ id: "sub-p2", header: { origin: "subagent", parentSession: "p-fail" } });
+
+  const entity = f.registry.list()[0];
+  const origDetach = entity.detachSession;
+  entity.detachSession = async (id) => {
+    if (id === "p-fail") {
+      throw new Error("Disk error: parent detachment failed");
+    }
+    return origDetach.call(entity, id);
+  };
+
+  const plugin = f.mount();
+
+  const res = await plugin.request("/delete", { sessionId: "p-fail" });
+  assert.equal(res.status, 500);
+  assert.equal(res.data.ok, false);
+  assert.equal(res.data.partialFailure, true);
+  assert.match(res.data.error, /删除主会话 'p-fail' 失败/);
+  assert.deepEqual(res.data.deletedSubagents.sort(), ["sub-p1", "sub-p2"]);
+  assert.deepEqual(res.data.remainingSessions, ["p-fail"]);
+
+  // Verify disk: both subagents were deleted
+  for (const subId of ["sub-p1", "sub-p2"]) {
+    let exists = true;
+    try { await fs.stat(f.artifactPath({ id: subId, cwd: join(f.home, "ws1") })); }
+    catch { exists = false; }
+    assert.equal(exists, false, `Subagent '${subId}' must have been deleted`);
+  }
+
+  // Verify disk: parent still exists
+  const parentStat = await fs.stat(f.artifactPath({ id: "p-fail", cwd: join(f.home, "ws1") }));
+  assert.ok(parentStat.size > 0, "Parent session must still exist on disk");
+});
+
+test("issue #33: /batch accurately reports partial failure and cascades when parent deletion fails", async t => {
+  const f = await fixture(t);
+
+  await f.stage({ id: "p-batch-fail", header: { origin: "user" } });
+  await f.stage({ id: "sub-bf1", header: { origin: "subagent", parentSession: "p-batch-fail" } });
+
+  const entity = f.registry.list()[0];
+  const origDetach = entity.detachSession;
+  entity.detachSession = async (id) => {
+    if (id === "p-batch-fail") {
+      throw new Error("Disk error: parent detachment failed");
+    }
+    return origDetach.call(entity, id);
+  };
+
+  const plugin = f.mount();
+
+  // Request batch delete with both parent and the subagent
+  const batchRes = await plugin.request("/batch", {
+    action: "delete",
+    sessionIds: ["p-batch-fail", "sub-bf1"]
+  });
+
+  assert.equal(batchRes.status, 200);
+  assert.equal(batchRes.data.ok, true);
+  assert.equal(batchRes.data.result.summary.failed, 1);
+  assert.equal(batchRes.data.result.summary.success, 1);
+
+  const [parentItem, subItem] = batchRes.data.result.items;
+  assert.equal(parentItem.sessionId, "p-batch-fail");
+  assert.equal(parentItem.status, "failed");
+  assert.equal(parentItem.partialFailure, true);
+  assert.deepEqual(parentItem.deletedSubagents, ["sub-bf1"]);
+  assert.deepEqual(parentItem.remainingSessions, ["p-batch-fail"]);
+
+  // sub-bf1 was already deleted during parent processing, so it is reported as cascaded success
+  assert.equal(subItem.sessionId, "sub-bf1");
+  assert.equal(subItem.status, "success");
+  assert.equal(subItem.cascaded, true);
+
+  // Verify disk
+  let subExists = true;
+  try { await fs.stat(f.artifactPath({ id: "sub-bf1", cwd: join(f.home, "ws1") })); }
+  catch { subExists = false; }
+  assert.equal(subExists, false, "Subagent must be removed from disk");
+
+  const pStat = await fs.stat(f.artifactPath({ id: "p-batch-fail", cwd: join(f.home, "ws1") }));
+  assert.ok(pStat.size > 0, "Parent must remain on disk");
+});
+
+test("issue #33: /delete accurately reports partial failure when subagent fails midway", async t => {
+  const f = await fixture(t);
+
+  await f.stage({ id: "p-midway", header: { origin: "user" } });
+  await f.stage({ id: "sub-m1", header: { origin: "subagent", parentSession: "p-midway" } });
+  await f.stage({ id: "sub-m2", header: { origin: "subagent", parentSession: "sub-m1" } });
+
+  const entity = f.registry.list()[0];
+  const origDetach = entity.detachSession;
+  entity.detachSession = async (id) => {
+    if (id === "sub-m1") {
+      throw new Error("Disk error: failed to detach sub-m1");
+    }
+    return origDetach.call(entity, id);
+  };
+
+  const plugin = f.mount();
+
+  const res = await plugin.request("/delete", { sessionId: "p-midway" });
+  assert.equal(res.status, 500);
+  assert.equal(res.data.ok, false);
+  assert.equal(res.data.partialFailure, true);
+  assert.match(res.data.error, /删除子智能体 'sub-m1' 失败/);
+  // sub-m2 was deleted first (descendant-first)
+  assert.deepEqual(res.data.deletedSubagents, ["sub-m2"]);
+  assert.deepEqual(res.data.remainingSessions, ["p-midway", "sub-m1"]);
+});

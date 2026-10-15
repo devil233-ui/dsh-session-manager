@@ -56,7 +56,64 @@ export function mountClient({ sessions = [], current = "", archivedIds = [], wor
   };
   const React = {
     Component: class { constructor(props) { this.props = props; } }, Fragment: Symbol("Fragment"),
-    createElement: (type, props, ...children) => ({ type, props: { ...props, children } }),
+    createElement: (type, props, ...children) => {
+      const vnode = { type, props: { ...props, children } };
+      if (props?.ref && typeof props.ref === "object" && "current" in props.ref) {
+        const refNode = {
+          nodeType: 1,
+          vnode,
+          tagName: typeof type === "string" ? type.toUpperCase() : "DIV",
+          getBoundingClientRect: () => ({ top: 100, left: 100, bottom: 130, right: 130, width: 30, height: 30 }),
+          contains(target) {
+            if (!target) return false;
+            if (target === this || target === vnode) return true;
+            if (target._refNode === this) return true;
+            let found = false;
+            const search = (node) => {
+              if (found || !node) return;
+              if (node === target || node === target?.vnode) { found = true; return; }
+              if (Array.isArray(node)) { node.forEach(search); return; }
+              if (node && typeof node === "object" && node.props?.children) search(node.props.children);
+            };
+            search(vnode);
+            return found;
+          },
+          closest(sel) {
+            if (!sel || typeof sel !== "string") return null;
+            const classes = (props.className || "").split(/\s+/);
+            if (sel.split(",").some(s => classes.includes(s.trim().replace(/^\./, "")))) {
+              return refNode;
+            }
+            return null;
+          },
+          querySelector(sel) {
+            if (!sel || typeof sel !== "string") return null;
+            const targetCls = sel.replace(/^\./, "");
+            let found = null;
+            const search = (node) => {
+              if (found || !node) return;
+              if (node && typeof node === "object" && node.props?.className && typeof node.props.className === "string") {
+                if (node.props.className.split(/\s+/).includes(targetCls)) {
+                  found = {
+                    nodeType: 1,
+                    vnode: node,
+                    getBoundingClientRect: () => ({ top: 100, left: 100, bottom: 130, right: 130, width: 30, height: 30 })
+                  };
+                  return;
+                }
+              }
+              if (Array.isArray(node)) { node.forEach(search); return; }
+              if (node && typeof node === "object" && node.props?.children) search(node.props.children);
+            };
+            search(vnode);
+            return found;
+          },
+          querySelectorAll() { return []; }
+        };
+        props.ref.current = refNode;
+      }
+      return vnode;
+    },
     createPortal(node, container) { portals.push({ node, container }); return node; },
     useState(initial) {
       const [host, slot] = hook();
@@ -80,6 +137,8 @@ export function mountClient({ sessions = [], current = "", archivedIds = [], wor
         for (const effect of this.effects.splice(0)) effect();
         return this.tree;
       },
+      find(predicate) { return nodes(this.tree, predicate)[0]; },
+      findAll(predicate) { return nodes(this.tree, predicate); },
       dispose() { for (const slot of this.hooks) slot.cleanup?.(); },
     };
     result.render(); return result;

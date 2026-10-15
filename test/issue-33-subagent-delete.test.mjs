@@ -283,3 +283,184 @@ test("issue #33: batch delete deduplicates cascaded subagents without double del
   assert.equal(itemP2.status, "success");
   assert.equal(itemP2.subagentCount, 0);
 });
+
+test("issue #33: cold session with agents.get() throwing error does not break preview or cascaded delete", async t => {
+  const f = await fixture(t);
+
+  // Simulate DSH behavior where agents.get() throws ApiRemoteSessionNotFound on cold sessions
+  f.ctx.agents.get = (id) => {
+    const err = new Error(`ApiRemoteSessionNotFound: session '${id}' is not loaded in memory`);
+    err.code = "ApiRemoteSessionNotFound";
+    throw err;
+  };
+
+  await f.stage({ id: "parent-cold", header: { origin: "user" } });
+  await f.stage({ id: "sub-cold", header: { origin: "subagent", parentSession: "parent-cold" } });
+
+  const plugin = f.mount();
+
+  const previewRes = await plugin.request("/delete-preview?sessionId=parent-cold", undefined, "GET");
+  assert.equal(previewRes.status, 200);
+  assert.equal(previewRes.data.ok, true);
+  assert.equal(previewRes.data.result.subagentCount, 1);
+  assert.equal(previewRes.data.result.subagents[0].id, "sub-cold");
+
+  const delRes = await plugin.request("/delete", { sessionId: "parent-cold" });
+  assert.equal(delRes.status, 200);
+  assert.equal(delRes.data.ok, true);
+  assert.equal(delRes.data.result.subagentCount, 1);
+  assert.deepEqual(delRes.data.result.deletedSubagents, ["sub-cold"]);
+
+  // Both should be deleted on disk
+  for (const id of ["parent-cold", "sub-cold"]) {
+    let exists = true;
+    try {
+      await fs.stat(f.artifactPath({ id, cwd: join(f.home, "ws1") }));
+    } catch {
+      exists = false;
+    }
+    assert.equal(exists, false, `Session artifact '${id}' should have been removed`);
+  }
+});
+
+test("issue #33: refuses cascade deletion when session scan is incomplete or errored", async t => {
+  const f = await fixture(t);
+
+  await f.stage({ id: "parent-incomplete", header: { origin: "user" } });
+  await f.stage({ id: "sub-incomplete", header: { origin: "subagent", parentSession: "parent-incomplete" } });
+
+  // Simulate persistence.list returning invalid data or throwing, causing scanSessionHeaders to report errors
+  f.persistence.list = async () => {
+    throw new Error("Disk listing EIO: read failed");
+  };
+
+  const plugin = f.mount();
+
+  // Preview must reject with 500 when scan is incomplete
+  const previewRes = await plugin.request("/delete-preview?sessionId=parent-incomplete", undefined, "GET");
+  assert.equal(previewRes.status, 500);
+  assert.equal(previewRes.data.ok, false);
+  assert.match(previewRes.data.error, /扫描子智能体会话失败/);
+
+  // Delete must also reject with 500 and NOT delete anything
+  const delRes = await plugin.request("/delete", { sessionId: "parent-incomplete" });
+  assert.equal(delRes.status, 500);
+  assert.equal(delRes.data.ok, false);
+  assert.match(delRes.data.error, /扫描子智能体会话失败/);
+
+  // Files must still exist on disk (no destruction on partial scan)
+  const stat = await fs.stat(f.artifactPath({ id: "parent-incomplete", cwd: join(f.home, "ws1") }));
+  assert.ok(stat.size > 0, "parent session file must be preserved");
+});
+
+test("issue #33: pre-delete validation: directory validation failure aborts before removing any files", async t => {
+  const f = await fixture(t);
+
+  await f.stage({ id: "parent-safe", header: { origin: "user" } });
+  await f.stage({ id: "sub-invalid", header: { origin: "subagent", parentSession: "parent-safe" } });
+
+  // Simulate subagent having an invalid directory (outside sessions root)
+  const originalLocate = f.persistence.locate;
+  f.persistence.locate = (header) => {
+    if (header.id === "sub-invalid") {
+      return { path: join(tmpdir(), "outside-root", "session.v3.jsonl.zstd") };
+    }
+    return originalLocate(header);
+  };
+
+  const plugin = f.mount();
+
+  const delRes = await plugin.request("/delete", { sessionId: "parent-safe" });
+  assert.equal(delRes.status, 500);
+  assert.equal(delRes.data.ok, false);
+
+  // Parent session must NOT have been removed because validation happens before deleting any files
+  const parentStat = await fs.stat(f.artifactPath({ id: "parent-safe", cwd: join(f.home, "ws1") }));
+  assert.ok(parentStat.size > 0, "Parent session must still exist on disk");
+});
+
+test("issue #33: descendant-first deletion order and midway partial failure reporting", async t => {
+  const f = await fixture(t);
+
+  // Root -> child -> leaf
+  await f.stage({ id: "p-order", header: { origin: "user" } });
+  await f.stage({ id: "sub-child", header: { origin: "subagent", parentSession: "p-order" } });
+  await f.stage({ id: "sub-leaf", header: { origin: "subagent", parentSession: "sub-child" } });
+
+  const entity = f.registry.list()[0];
+  const origDetach = entity.detachSession;
+  entity.detachSession = async (id) => {
+    if (id === "sub-child") {
+      throw new Error("Disk error: failed to detach sub-child from workspace");
+    }
+    return origDetach.call(entity, id);
+  };
+
+  const plugin = f.mount();
+
+  // Test in /batch to verify accurate reporting of partial failure
+  const batchRes = await plugin.request("/batch", {
+    action: "delete",
+    sessionIds: ["p-order"]
+  });
+
+  assert.equal(batchRes.status, 200);
+  assert.equal(batchRes.data.ok, true);
+  assert.equal(batchRes.data.result.summary.failed, 1);
+  assert.equal(batchRes.data.result.summary.success, 0);
+
+  const item = batchRes.data.result.items[0];
+  assert.equal(item.sessionId, "p-order");
+  assert.equal(item.status, "failed");
+  assert.match(item.error, /删除子智能体 'sub-child' 失败/);
+  // Leaf was deleted first
+  assert.deepEqual(item.deletedSubagents, ["sub-leaf"]);
+  assert.deepEqual(item.remainingSessions, ["p-order", "sub-child"]);
+
+  // Verify disk state:
+  // 1. sub-leaf was deleted before sub-child failed
+  let leafExists = true;
+  try { await fs.stat(f.artifactPath({ id: "sub-leaf", cwd: join(f.home, "ws1") })); }
+  catch { leafExists = false; }
+  assert.equal(leafExists, false, "sub-leaf was deleted first");
+
+  // 2. sub-child failed to delete (detach threw before artifact rm) and still exists
+  const childStat = await fs.stat(f.artifactPath({ id: "sub-child", cwd: join(f.home, "ws1") }));
+  assert.ok(childStat.size > 0, "sub-child still exists");
+
+  // 3. parent was not deleted because child failed before parent
+  const parentStat = await fs.stat(f.artifactPath({ id: "p-order", cwd: join(f.home, "ws1") }));
+  assert.ok(parentStat.size > 0, "parent was preserved after subagent deletion failure");
+});
+
+test("issue #33: subagent archive record cleanup failure aggregates warning without failing deletion", async t => {
+  const f = await fixture(t);
+
+  await f.stage({ id: "p-warn", header: { origin: "user" } });
+  await f.stage({ id: "sub-warn", header: { origin: "subagent", parentSession: "p-warn" } });
+
+  const plugin = f.mount();
+
+  // Corrupt workspace-archives.v1.json in home/dsh-session-manager to cause removeSession to fail
+  const archiveDir = join(f.home, "dsh-session-manager");
+  await fs.mkdir(archiveDir, { recursive: true });
+  const archivesPath = join(archiveDir, "workspace-archives.v1.json");
+  await fs.writeFile(archivesPath, "{ corrupt json }");
+
+  const delRes = await plugin.request("/delete", { sessionId: "p-warn" });
+  assert.equal(delRes.status, 200);
+  assert.equal(delRes.data.ok, true);
+  assert.ok(Array.isArray(delRes.data.result.warnings) && delRes.data.result.warnings.length > 0, "Warnings should be aggregated");
+  assert.ok(delRes.data.result.warnings.some(w => w.includes("归档记录清理失败")), "Should report archive cleanup failure warning");
+
+  // Files should still be successfully deleted
+  for (const id of ["p-warn", "sub-warn"]) {
+    let exists = true;
+    try {
+      await fs.stat(f.artifactPath({ id, cwd: join(f.home, "ws1") }));
+    } catch {
+      exists = false;
+    }
+    assert.equal(exists, false, `Session artifact '${id}' should have been removed`);
+  }
+});

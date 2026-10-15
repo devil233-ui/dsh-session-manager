@@ -450,3 +450,96 @@ test("issue #34 & #33: BatchPreviewDialog title is '删除会话' when action is
   harness.dispose();
 });
 
+test("issue #34: outside click uses capturing phase and intercepts click to prevent triggering underlying button", async () => {
+  const harness = mountClient();
+  const { ConfirmDialog } = harness.exports;
+
+  let cancelled = false;
+  let underlyingExecuted = false;
+
+  const confirmComp = harness.mountComponent(ConfirmDialog, {
+    open: true,
+    title: "Delete Confirm",
+    onCancel: () => { cancelled = true; }
+  });
+
+  await new Promise(r => setTimeout(r, 60));
+
+  // Simulated button sitting beneath the dialog
+  const underlyingButton = {
+    closest(sel) { return null; },
+    onClick() { underlyingExecuted = true; }
+  };
+
+  // Dispatch click to underlying button
+  const result = harness.dispatchClick(underlyingButton);
+
+  // Capturing phase listener intercepted the event
+  assert.equal(result.stopped, true, "Event must be stopped in capturing phase");
+  assert.equal(result.defaultPrevented, true, "Default action must be prevented");
+  assert.equal(cancelled, true, "Dialog must have received onCancel");
+  assert.equal(underlyingExecuted, false, "Underlying button onClick must NOT be executed");
+
+  confirmComp.dispose();
+  harness.dispose();
+});
+
+test("issue #34 & #33: confirm button is disabled and clicks guarded when preview is loading or failed", async () => {
+  const harness = mountClient();
+  const { ConfirmDialog, BatchPreviewDialog } = harness.exports;
+
+  // 1. ConfirmDialog with confirmDisabled = true
+  let singleConfirmed = false;
+  const singleComp = harness.mountComponent(ConfirmDialog, {
+    open: true,
+    title: "Delete Session",
+    confirmDisabled: true,
+    onConfirm: () => { singleConfirmed = true; }
+  });
+
+  const singleConfirmBtn = nodes(singleComp.tree, n => n.type === "button" && (n.props?.className?.includes("sm-nativeDialogConfirm") || n.props?.className?.includes("sm-nativeDialogDanger")))[0];
+  assert.ok(singleConfirmBtn, "Confirm button must exist");
+  assert.equal(singleConfirmBtn.props.disabled, true, "Confirm button must be disabled when confirmDisabled is true");
+  singleConfirmBtn.props.onClick();
+  assert.equal(singleConfirmed, false, "onConfirm must not be called when disabled");
+  singleComp.dispose();
+
+  // 2. BatchPreviewDialog with loading = true
+  let batchLoadingExecuted = false;
+  const batchLoadingComp = harness.mountComponent(BatchPreviewDialog, {
+    open: true,
+    action: "delete",
+    actionLabel: "删除会话",
+    sessions: [{ id: "s1" }],
+    loading: true,
+    onExecute: () => { batchLoadingExecuted = true; }
+  });
+
+  const batchLoadingBtn = nodes(batchLoadingComp.tree, n => n.type === "button" && (n.props?.className?.includes("sm-nativeDialogConfirm") || n.props?.className?.includes("sm-nativeDialogDanger")))[0];
+  assert.ok(batchLoadingBtn, "Batch confirm button must exist");
+  assert.equal(batchLoadingBtn.props.disabled, true, "Batch confirm button must be disabled when loading");
+  batchLoadingBtn.props.onClick();
+  assert.equal(batchLoadingExecuted, false, "onExecute must not be called when loading");
+  batchLoadingComp.dispose();
+
+  // 3. BatchPreviewDialog with error
+  let batchErrorExecuted = false;
+  const batchErrorComp = harness.mountComponent(BatchPreviewDialog, {
+    open: true,
+    action: "delete",
+    actionLabel: "删除会话",
+    sessions: [{ id: "s1" }],
+    error: "Failed to fetch subagents",
+    onExecute: () => { batchErrorExecuted = true; }
+  });
+
+  const batchErrorBtn = nodes(batchErrorComp.tree, n => n.type === "button" && (n.props?.className?.includes("sm-nativeDialogConfirm") || n.props?.className?.includes("sm-nativeDialogDanger")))[0];
+  assert.ok(batchErrorBtn, "Batch confirm button must exist");
+  assert.equal(batchErrorBtn.props.disabled, true, "Batch confirm button must be disabled when preview failed");
+  batchErrorBtn.props.onClick();
+  assert.equal(batchErrorExecuted, false, "onExecute must not be called when error is present");
+  batchErrorComp.dispose();
+
+  harness.dispose();
+});
+

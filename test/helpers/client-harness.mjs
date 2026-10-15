@@ -28,7 +28,7 @@ const clipboardStub = { writes: [], writeText(text) { this.writes.push(text); re
 /** Real, unmodified client bundle and registered slots, with a small hook host
  * to keep CI dependency-free. Tests exercise rendered controls, shared-store
  * subscriptions, async responses and the actual annotation editor. */
-export function mountClient({ sessions = [], current = "", archivedIds = [], workspaces = [], language = "zh", sessionCreatedAt = {}, fetchWorkspaces, sessionAnnotations = {}, fetchAnnotations, saveAnnotations, fetchUpdateCheck, fetchUpdateInstall, fetchNpmLatest, fetchPresetScan, confirm = () => true, wide = true, initialStorage = {}, innerWidth = 1200, innerHeight = 768, querySelector: customQuerySelector } = {}) {
+export function mountClient({ sessions = [], current = "", archivedIds = [], workspaces = [], language = "zh", sessionCreatedAt = {}, fetchWorkspaces, sessionAnnotations = {}, fetchAnnotations, saveAnnotations, fetchUpdateCheck, fetchUpdateInstall, fetchNpmLatest, fetchPresetScan, fetchDeletePreview, confirm = () => true, wide = true, initialStorage = {}, innerWidth = 1200, innerHeight = 768, querySelector: customQuerySelector } = {}) {
   // Fresh clipboard stub per mount so each test sees only its own writes.
   clipboardStub.writes.length = 0;
   let list = { ids: sessions.map(s => s.id), byId: Object.fromEntries(sessions.map(s => [s.id, s])), current };
@@ -43,6 +43,7 @@ export function mountClient({ sessions = [], current = "", archivedIds = [], wor
   // is portaled into the plugin's overlay root instead of rendering in place.
   const portals = [];
   const listeners = new Map();
+  const captureListeners = new Map();
   let activeHost;
   const sessionOpenCalls = [];
   const clearMainCalls = [];
@@ -203,11 +204,38 @@ export function mountClient({ sessions = [], current = "", archivedIds = [], wor
     localStorage: localStorageStub,
     get __DSH_SM_TEST_UPDATE__() { return globalThis.__DSH_SM_TEST_UPDATE__; },
     set __DSH_SM_TEST_UPDATE__(v) { globalThis.__DSH_SM_TEST_UPDATE__ = v; },
-    addEventListener(type, handler) { if (!listeners.has(type)) listeners.set(type, new Set()); listeners.get(type).add(handler); },
-    removeEventListener(type, handler) { listeners.get(type)?.delete(handler); },
+    addEventListener(type, handler, options) {
+      const isCapture = options === true || Boolean(options && options.capture);
+      const targetMap = isCapture ? captureListeners : listeners;
+      if (!targetMap.has(type)) targetMap.set(type, new Set());
+      targetMap.get(type).add(handler);
+    },
+    removeEventListener(type, handler, options) {
+      const isCapture = options === true || Boolean(options && options.capture);
+      const targetMap = isCapture ? captureListeners : listeners;
+      targetMap.get(type)?.delete(handler);
+    },
     dispatchEvent(event) {
       const type = event?.type || event;
-      for (const handler of listeners.get(type) ?? []) handler(event);
+      let stopped = false;
+      const e = {
+        defaultPrevented: false,
+        preventDefault() { this.defaultPrevented = true; },
+        stopPropagation() { stopped = true; },
+        stopImmediatePropagation() { stopped = true; },
+        ...(typeof event === "object" ? event : { type })
+      };
+      for (const handler of captureListeners.get(type) ?? []) {
+        handler(e);
+        if (stopped) break;
+      }
+      if (!stopped) {
+        for (const handler of listeners.get(type) ?? []) {
+          handler(e);
+          if (stopped) break;
+        }
+      }
+      return !e.defaultPrevented;
     },
     __ModuleLoader__: { load(bundle) { exports = bundle.factory(name => name === "react" ? React : name === "@deepseek-ai/dsh-client-ui-primitives" ? { IconArchiveOutline20: () => null } : {}); } },
   };
@@ -246,6 +274,8 @@ export function mountClient({ sessions = [], current = "", archivedIds = [], wor
       } else if (url === "/session-manager/api/delete") {
         const body = options?.body ? JSON.parse(options.body) : {};
         data = { ok: true, result: { sessionId: body.sessionId, deleted: true } };
+      } else if (typeof url === "string" && url.startsWith("/session-manager/api/delete-preview")) {
+        data = fetchDeletePreview ? await fetchDeletePreview(options, url) : { ok: true, result: { subagentCount: 0 } };
       } else if (typeof url === "string" && url.startsWith("/session-manager/api/preset-scan")) {
         data = fetchPresetScan ? await fetchPresetScan(options, url) : {
           ok: true,
@@ -405,16 +435,56 @@ export function mountClient({ sessions = [], current = "", archivedIds = [], wor
     dispatchWindowEvent(type, event) {
       let stopped = false;
       const e = {
+        type,
         defaultPrevented: false,
+        stopped: false,
         preventDefault() { this.defaultPrevented = true; },
-        stopPropagation() { stopped = true; },
-        stopImmediatePropagation() { stopped = true; },
-        ...(event || { type })
+        stopPropagation() { this.stopped = true; stopped = true; },
+        stopImmediatePropagation() { this.stopped = true; stopped = true; },
+        ...(event || {})
       };
-      for (const handler of listeners.get(type) ?? []) {
+      for (const handler of captureListeners.get(type) ?? []) {
         handler(e);
         if (stopped) break;
       }
+      if (!stopped) {
+        for (const handler of listeners.get(type) ?? []) {
+          handler(e);
+          if (stopped) break;
+        }
+      }
+      return e;
+    },
+    dispatchClick(target, event = {}) {
+      let stopped = false;
+      const e = {
+        type: "click",
+        target,
+        defaultPrevented: false,
+        stopped: false,
+        preventDefault() { this.defaultPrevented = true; },
+        stopPropagation() { this.stopped = true; stopped = true; },
+        stopImmediatePropagation() { this.stopped = true; stopped = true; },
+        ...event
+      };
+      for (const handler of captureListeners.get("click") ?? []) {
+        handler(e);
+        if (stopped) break;
+      }
+      if (!stopped) {
+        if (typeof target?.onClick === "function") {
+          target.onClick(e);
+        } else if (typeof target?.props?.onClick === "function") {
+          target.props.onClick(e);
+        }
+      }
+      if (!stopped) {
+        for (const handler of listeners.get("click") ?? []) {
+          handler(e);
+          if (stopped) break;
+        }
+      }
+      return e;
     },
     setWindowDimensions(width, height) { if (width !== undefined) window.innerWidth = width; if (height !== undefined) window.innerHeight = height; },
     dispose() { dialogHost?.dispose(); headerHost?.dispose(); panelHost.dispose(); footerHost.dispose(); for (const cleanup of pluginCleanup) cleanup(); },

@@ -1213,3 +1213,124 @@ test("ui dropdowns: single-layer guard eliminates native select double-layer pop
   assert.doesNotMatch(SRC, /\n\s*installCustomDropdownInterceptor\(\);\s*\n\s*const inject/);
   assert.match(SRC, /window\.__dshSmDropdownInterceptorOff/);
 });
+
+test("workspace panel: excludes subagents and blank sessions from count and latestUpdatedAt, hides duplicate path", async () => {
+  const app = await mountClient({
+    current: "s1",
+    sessions: [
+      { id: "s1", displayTitle: "Alpha Main", updatedAt: 1000 },
+      { id: "s_sub", displayTitle: "Subagent Task", origin: "subagent", updatedAt: 99999 },
+      { id: "s_blank", displayTitle: "Blank Session", blank: true, updatedAt: 88888 },
+      { id: "s2", displayTitle: "Beta Main", updatedAt: 5000 }
+    ],
+    workspaces: [
+      {
+        id: "ws1",
+        name: "Alpha Workspace",
+        path: "D:/work/alpha",
+        updatedAt: 500,
+        sessionIds: ["s1", "s_sub", "s_blank"]
+      },
+      {
+        id: "ws2",
+        name: "Beta Workspace",
+        path: "D:/work/beta",
+        updatedAt: 800,
+        sessionIds: ["s2"]
+      }
+    ]
+  });
+  await app.flush();
+
+  // Switch to workspace management
+  const navTabs = nodes(app.tree[0], n => n.type === "button" && n.props?.role === "tab");
+  navTabs[1].props.onClick();
+  await app.flush();
+
+  // Both workspaces rendered
+  const wsRows = nodes(app.tree[0], n => n.props?.["data-workspace-id"]);
+  assert.equal(wsRows.length, 2, "must render 2 workspace rows");
+
+  // Sorted by latestUpdatedAt desc:
+  // ws2 latest user session is s2 (5000)
+  // ws1 latest user session is s1 (1000), ignoring s_sub (99999) and s_blank (88888)
+  // So ws2 must be first, ws1 second!
+  assert.equal(wsRows[0].props["data-workspace-id"], "ws2");
+  assert.equal(wsRows[1].props["data-workspace-id"], "ws1");
+
+  // Check ws1 rowMeta and rowTitle
+  const ws1Meta = nodes(wsRows[1], n => n.props?.className === "sm-rowMeta")[0];
+  const ws1MetaText = text(ws1Meta);
+  // Session count should be 1 (only s1, excluding s_sub and s_blank)
+  assert.ok(ws1MetaText.includes("1 个会话"), "ws1 session count must be 1, got: " + ws1MetaText);
+  // Must NOT include duplicate path in meta
+  assert.ok(!ws1MetaText.includes("alpha ·"), "must not include shortPath in meta: " + ws1MetaText);
+  assert.ok(!ws1MetaText.includes("Alpha Workspace ·"), "must not repeat workspace name in meta: " + ws1MetaText);
+
+  // Check rowTitle carries native title tooltip
+  const ws1Title = nodes(wsRows[1], n => n.props?.className === "sm-rowTitle")[0];
+  assert.equal(ws1Title.props.title, "D:/work/alpha", "row title must have path in title attribute");
+
+  // Check ws2 rowMeta
+  const ws2Meta = nodes(wsRows[0], n => n.props?.className === "sm-rowMeta")[0];
+  const ws2MetaText = text(ws2Meta);
+  assert.ok(ws2MetaText.includes("1 个会话"), "ws2 session count must be 1, got: " + ws2MetaText);
+  assert.ok(!ws2MetaText.includes("beta ·"), "ws2 must not include shortPath in meta");
+
+  app.dispose();
+});
+
+test("workspace management: empty workspace (0 sessions) shows '—' and sorts to bottom under updated-desc", async () => {
+  const now = Date.now();
+  const app = await mountClient({
+    sessions: [
+      { id: "s_active", displayTitle: "Active Session", updatedAt: now - 3600000 } // 1h ago
+    ],
+    workspaces: [
+      {
+        id: "ws_empty",
+        name: "Empty Old Workspace",
+        path: "D:/work/empty",
+        updatedAt: now - 1000, // Workspace record touched 1s ago (e.g. sessions moved away)
+        createdAt: now - 864000000,
+        sessionIds: []
+      },
+      {
+        id: "ws_active",
+        name: "Active Workspace",
+        path: "D:/work/active",
+        updatedAt: now - 7200000,
+        createdAt: now - 864000000,
+        sessionIds: ["s_active"]
+      }
+    ]
+  });
+  await app.flush();
+
+  // Switch to workspace management
+  const navTabs = nodes(app.tree[0], n => n.type === "button" && n.props?.role === "tab");
+  navTabs[1].props.onClick();
+  await app.flush();
+
+  const wsRows = nodes(app.tree[0], n => n.props?.["data-workspace-id"]);
+  assert.equal(wsRows.length, 2, "must render 2 workspace rows");
+
+  // Sorted by latestUpdatedAt desc:
+  // ws_active has active session s_active (1h ago)
+  // ws_empty has 0 sessions, so latestUpdatedAt is null, even though ws.updatedAt was 1s ago!
+  // Therefore ws_active MUST come first, ws_empty MUST come second (at the bottom)!
+  assert.equal(wsRows[0].props["data-workspace-id"], "ws_active", "active workspace with real session must sort above empty workspace");
+  assert.equal(wsRows[1].props["data-workspace-id"], "ws_empty", "empty workspace must sort to bottom");
+
+  // Verify ws_empty meta text shows '0 个会话 · —'
+  const emptyMeta = nodes(wsRows[1], n => n.props?.className === "sm-rowMeta")[0];
+  const emptyMetaText = text(emptyMeta);
+  assert.equal(emptyMetaText, "0 个会话 · —", "empty workspace without sessions must display '0 个会话 · —'");
+
+  // Verify ws_active meta text shows '1 个会话 · 最近更新：1h'
+  const activeMeta = nodes(wsRows[0], n => n.props?.className === "sm-rowMeta")[0];
+  const activeMetaText = text(activeMeta);
+  assert.ok(activeMetaText.includes("1 个会话 · 最近更新：1h"), "active workspace must display relative time of latest session: " + activeMetaText);
+
+  app.dispose();
+});

@@ -402,7 +402,20 @@ export function mountClient({ sessions = [], current = "", archivedIds = [], wor
     refreshCalls: refreshCalls,
     window: window,
     document: document,
-    dispatchWindowEvent(type, event) { for (const handler of listeners.get(type) ?? []) handler(event || { type }); },
+    dispatchWindowEvent(type, event) {
+      let stopped = false;
+      const e = {
+        defaultPrevented: false,
+        preventDefault() { this.defaultPrevented = true; },
+        stopPropagation() { stopped = true; },
+        stopImmediatePropagation() { stopped = true; },
+        ...(event || { type })
+      };
+      for (const handler of listeners.get(type) ?? []) {
+        handler(e);
+        if (stopped) break;
+      }
+    },
     setWindowDimensions(width, height) { if (width !== undefined) window.innerWidth = width; if (height !== undefined) window.innerHeight = height; },
     dispose() { dialogHost?.dispose(); headerHost?.dispose(); panelHost.dispose(); footerHost.dispose(); for (const cleanup of pluginCleanup) cleanup(); },
   };

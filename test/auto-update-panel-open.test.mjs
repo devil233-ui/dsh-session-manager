@@ -273,3 +273,70 @@ test("auto-update: finding update does not open modal dialog and marks available
   harness.dispose();
 });
 
+test("auto-update: request timeout aborts and enters 30m failure cooldown", async () => {
+  let passedSignal = null;
+  const harness = mountClient({
+    fetchUpdateCheck: async (options) => {
+      passedSignal = options?.signal;
+      const err = new Error("检查更新超时");
+      err.name = "AbortError";
+      throw err;
+    }
+  });
+
+  const { updateStore } = harness.exports;
+  updateStore.setAutoCheck(true);
+  updateStore.state.status = "idle";
+  updateStore.state.checkedAt = null;
+  updateStore.lastFailedAt = null;
+
+  const now = Date.now();
+  await updateStore.checkForUpdate({ manual: true, openDialog: false });
+
+  assert.ok(passedSignal, "AbortSignal must be forwarded in fetch options");
+  assert.equal(updateStore.state.status, "error", "Must transition to error on timeout");
+  assert.equal(updateStore.state.error, "检查更新超时", "Error message must indicate timeout");
+  assert.ok(updateStore.lastFailedAt >= now, "lastFailedAt must be recorded");
+
+  // Subsequent auto-checks must be blocked within 30 min cooldown
+  assert.equal(updateStore.shouldAutoCheck(now + 1000), false, "Must enter 30-minute failure cooldown");
+
+  harness.dispose();
+});
+
+test("auto-update: panel open triggers exactly one update check without duplicate entry", async () => {
+  let checkCalls = 0;
+  const harness = mountClient({
+    fetchUpdateCheck: async () => {
+      checkCalls++;
+      return {
+        ok: true,
+        result: {
+          currentVersion: "1.0.0",
+          latestVersion: "1.0.0",
+          hasUpdate: false
+        }
+      };
+    }
+  });
+
+  const { updateStore, panelStore } = harness.exports;
+  updateStore.setAutoCheck(true);
+  updateStore.state.status = "idle";
+  updateStore.state.checkedAt = Date.now() - (7 * 60 * 60 * 1000); // 7 hours ago
+  updateStore.lastFailedAt = null;
+
+  checkCalls = 0;
+  // Opening panel triggers check
+  panelStore.open = false;
+  panelStore.set(true);
+
+  await harness.flush();
+  assert.equal(checkCalls, 1, "Opening panel must trigger exactly 1 update check");
+
+  // Additional re-render of panel must not trigger a second check
+  await harness.flush();
+  assert.equal(checkCalls, 1, "No duplicate check should be triggered after mount/render");
+
+  harness.dispose();
+});

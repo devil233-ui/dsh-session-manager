@@ -204,7 +204,7 @@ test("Settings Card & UpdateDialog: follow DSH theme tokens instead of a private
   assert.match(src, /\.sm-settingsSelect\{[^}]*background:var\(--dsw-alias-bg-layer-2/);
   assert.match(src, /\.sm-settingsTag\{[^}]*background:var\(--dsw-alias-markdown-tag/);
   assert.match(src, /\.sm-settingsBadgeLink\{[^}]*background:var\(--dsw-alias-markdown-tag/);
-  assert.match(src, /\.sm-settingsBadgeActions\{display:flex;align-items:center;gap:8px;margin-left:auto;flex-shrink:0\}/);
+  assert.match(src, /\.sm-settingsBadgeActions\{display:flex;align-items:center;gap:8px;margin-left:auto;flex:0 0 280px;width:280px;min-width:280px;max-width:280px;box-sizing:border-box;justify-content:flex-end\}/);
   assert.match(src, /\.sm-settingsRow>span:first-child\{white-space:nowrap;flex-shrink:0\}/);
   assert.match(src, /\.sm-updateVersionGrid\{[^}]*background:var\(--dsw-alias-bg-layer-2/);
   assert.match(src, /\.sm-updateVersionLabel\{color:var\(--dsw-alias-label-secondary/);
@@ -266,3 +266,26 @@ test("Settings Card: registered in plugins.bundle.config slot for DSH desktop co
   harness.dispose();
 });
 
+test("Settings Card: registry select, opacity slider, and project badges align at uniform 280px width", async () => {
+  const fs = await import("node:fs");
+  const src = fs.readFileSync(new URL("../lib/client.js", import.meta.url), "utf8");
+
+  // Registry select, opacity slider, and badge actions share identical 280px width for vertical alignment
+  assert.match(src, /\.sm-settingsSelect\{[^}]*width:280px;min-width:280px;max-width:280px;flex:0 0 280px/);
+  assert.match(src, /\.sm-settingsSlider\{[^}]*flex:0 0 280px;width:280px;min-width:280px;max-width:280px/);
+  assert.match(src, /\.sm-settingsBadgeActions\{[^}]*flex:0 0 280px;width:280px;min-width:280px;max-width:280px;box-sizing:border-box;justify-content:flex-end/);
+
+  // Badge actions children share width equally without cramping
+  assert.match(src, /\.sm-settingsBadgeActions>\*\{display:inline-flex;flex:1 1 0;min-width:0\}/);
+  assert.match(src, /\.sm-settingsBadgeLink\{[^}]*min-height:28px;height:28px/);
+
+  // Reset button in slider harmonizes with 28px control height
+  assert.match(src, /\.sm-settingsResetBtn\{min-height:28px;height:28px;/);
+
+  // Rows have comfortable vertical breathing room (min-height: 36px, gap: 16px, margin-top: 8px)
+  assert.match(src, /\.sm-settingsRow\{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:36px;margin-top:8px\}/);
+
+  // Opacity hint is positioned below label in column flex to prevent text collision
+  assert.match(src, /\.sm-settingsRowLeft\{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:2px;min-width:0;flex:1 1 auto\}/);
+  assert.match(src, /\.sm-settingsHintInline\{margin-left:0;font-weight:normal\}/);
+});

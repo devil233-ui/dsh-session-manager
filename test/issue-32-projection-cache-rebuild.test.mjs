@@ -350,3 +350,117 @@ test("cache consistency after move and corrupt line safety (issue #32)", async t
     "must warn about corrupt JSON line skipping cache refold"
   );
 });
+
+test("sizeBytes: DSH official statSession return structure with sizeBytes > 5MB skips cache refold on all paths (issue #32)", async t => {
+  const h = await createHarness(t);
+  const staged = await h.stage({
+    events: [
+      { type: "session/header", seq: 0, data: {} },
+      { type: "user/message", seq: 1, data: { content: "normal events" } }
+    ]
+  });
+  h.persistence.list = async () => [{ header: staged.header, revision: "rev-1" }];
+  // DSH official persistence.stat returns { header, revision, sizeBytes }
+  h.persistence.stat = async () => ({
+    header: staged.header,
+    revision: "rev-1",
+    sizeBytes: 10 * 1024 * 1024 // 10MB > 5MB limit
+  });
+
+  await h.mount().boot();
+
+  assert.equal(h.coldSnapshotCalls.length, 0, "boot refold must be skipped for large file (>5MB)");
+  assert.ok(
+    h.infoLogs.some(log => log.includes("skipping boot cache refold for large artifact") && log.includes("10485760 bytes")),
+    "must log info about skipping large artifact"
+  );
+
+  // Now test post-move sizeBytes check as well
+  h.infoLogs.length = 0;
+  h.coldSnapshotCalls.length = 0;
+  const res = await h.mount().request("/move", { sessionId: staged.header.id, targetWorkspaceId: "target" });
+  assert.equal(res.status, 200);
+  assert.equal(h.coldSnapshotCalls.length, 0, "post-move refold must also be skipped for large file (>5MB)");
+});
+
+test("budget: failed sessions are counted towards MAX_BOOT_REFOLD_COUNT to prevent infinite spin (issue #32)", async t => {
+  const h = await createHarness(t);
+  const headers = [];
+  // Generate 70 sessions that will fail cache refold (e.g. unresolvable seeded session)
+  for (let i = 0; i < 70; i++) {
+    const id = `s-fail-${i}`;
+    const staged = await h.stage({
+      id,
+      header: { id, isSeeded: true, parentSession: "p-missing" },
+      rawLines: [
+        JSON.stringify({ type: "session/header", seq: 0, data: {} }) + "\n",
+        JSON.stringify({ type: "user/message", seq: 1, data: { content: "no end-seed" } }) + "\n"
+      ]
+    });
+    headers.push(staged.header);
+    h.state.workspaces[0].sessionIds.push(id);
+  }
+  h.persistence.list = async () => headers.map(header => ({ header, revision: "rev" }));
+
+  await h.mount().boot();
+
+  assert.equal(h.coldSnapshotCalls.length, 0);
+  // Verify budget reached log confirms attemptedCount reached 50
+  assert.ok(
+    h.infoLogs.some(log => log.includes("boot projection cache refold budget reached (50 attempted")),
+    "failed sessions must count toward budget and stop after 50 attempted"
+  );
+});
+
+test("header precedence: DSH official handle.header takes precedence over caller header (issue #32)", async t => {
+  const h = await createHarness(t);
+  const staged = await h.stage({
+    header: { version: 2, title: "Old Title" },
+    events: [
+      { type: "session/header", seq: 0, data: {} },
+      { type: "user/message", seq: 1, data: { content: "hello" } }
+    ]
+  });
+  h.persistence.list = async () => [{ header: staged.header, revision: "rev-1" }];
+
+  // Official persistence.open returns a handle with migrated header
+  h.persistence.open = async (sessionId) => ({
+    header: { id: sessionId, version: 4, title: "Migrated Logical Title", cwd: staged.header.cwd },
+    inheritedEventCount: 0,
+    read: async () => [
+      { type: "session/header", seq: 0, data: {} },
+      { type: "user/message", seq: 1, data: { content: "hello" } }
+    ],
+    close: async () => {}
+  });
+
+  await h.mount().boot();
+
+  assert.equal(h.coldSnapshotCalls.length, 1);
+  assert.equal(h.coldSnapshotCalls[0].meta.version, 4, "official handle.header version (4) must take precedence over old header (2)");
+  assert.equal(h.coldSnapshotCalls[0].meta.title, "Migrated Logical Title", "official handle.header title must take precedence");
+});
+
+test("official read failure: official openSessionRead throwing does not fall back to disk artifact (issue #32)", async t => {
+  const h = await createHarness(t);
+  const staged = await h.stage({
+    events: [
+      { type: "session/header", seq: 0, data: {} },
+      { type: "user/message", seq: 1, data: { content: "on disk" } }
+    ]
+  });
+  h.persistence.list = async () => [{ header: staged.header, revision: "rev-1" }];
+
+  // Official persistence.open throws decoding/migration error
+  h.persistence.open = async () => {
+    throw new Error("official session migration failed: corrupt frame");
+  };
+
+  await h.mount().boot();
+
+  assert.equal(h.coldSnapshotCalls.length, 0, "must NOT fall back to disk artifact when official read/migration fails");
+  assert.ok(
+    h.warnings.some(w => w.includes("official read/migration failed: official session migration failed: corrupt frame")),
+    "must warn about official read/migration failure"
+  );
+});
